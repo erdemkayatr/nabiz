@@ -6,9 +6,16 @@
     Yalnızca dosya yoksa yazılır. Her derlemede üzerine yazsaydı, kullanıcının
     girdiği sunucu adresi bir sonraki derlemede silinirdi.
   -->
+  <!--
+    Yalnızca çalıştırılabilir projeler için. Bir kütüphaneye nabiz.json
+    üretmek anlamsız: agent'ı başlatan da yapılandırmayı okuyan da uygulamanın
+    kendisidir, ona referans veren ara kütüphane değil.
+  -->
   <Target Name="NabizCreateConfig"
           BeforeTargets="AssignTargetPaths;BeforeBuild"
-          Condition="'$(NabizGenerateConfig)' == 'true' AND !Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
+          Condition="'$(NabizGenerateConfig)' == 'true'
+                     AND ('$(OutputType)' == 'Exe' OR '$(OutputType)' == 'WinExe')
+                     AND !Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
     <Copy SourceFiles="$(MSBuildThisFileDirectory)nabiz.template.json"
           DestinationFiles="$(MSBuildProjectDirectory)/$(NabizConfigFile)" />
     <Message Importance="high"
@@ -24,7 +31,8 @@
   <Target Name="NabizIncludeConfig"
           BeforeTargets="AssignTargetPaths"
           DependsOnTargets="NabizCreateConfig"
-          Condition="Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
+          Condition="('$(OutputType)' == 'Exe' OR '$(OutputType)' == 'WinExe')
+                     AND Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
     <ItemGroup>
       <!-- Kullanıcı dosyayı zaten eklediyse ikinci kez ekleme. -->
       <None Include="$(MSBuildProjectDirectory)/$(NabizConfigFile)"
@@ -44,7 +52,8 @@
   -->
   <Target Name="NabizInjectAutoStart"
           BeforeTargets="BeforeCompile;CoreCompile"
-          Condition="'$(NabizAutoStart)' == 'true' AND '$(Language)' == 'C#'">
+          Condition="'$(NabizAutoStart)' == 'true' AND '$(Language)' == 'C#'
+                     AND ('$(OutputType)' == 'Exe' OR '$(OutputType)' == 'WinExe')">
     <PropertyGroup>
       <NabizGeneratedFile>$(IntermediateOutputPath)NabizAutoStart.g.cs</NabizGeneratedFile>
     </PropertyGroup>
