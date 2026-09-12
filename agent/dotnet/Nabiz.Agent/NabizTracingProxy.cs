@@ -43,13 +43,20 @@ internal class NabizTracingProxy : DispatchProxy
         return proxy;
     }
 
+    // Metot başına karar bir kez verilip önbelleğe alınır: her çağrıda
+    // attribute taramak, ölçmeye çalıştığımız gecikmeye kendi maliyetimizi
+    // eklemek olurdu.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<MethodInfo, string?> _spanNames = new();
+
     protected override object? Invoke(MethodInfo? method, object?[]? args)
     {
         if (method is null) return null;
 
+        var spanName = _spanNames.GetOrAdd(method, ResolveSpanName);
+        if (spanName is null) return InvokeTarget(method, args);   // [NabizIgnore]
+
         var parent = Activity.Current;
-        var activity = NabizCodeLevel.Source.StartActivity(
-            $"{_typeName}.{method.Name}", ActivityKind.Internal);
+        var activity = NabizCodeLevel.Source.StartActivity(spanName, ActivityKind.Internal);
 
         // Örnekleme span'i düşürdüyse hiçbir ölçüm yapma: kapalı bir agent'ın
         // maliyeti tek bir null kontrolü olmalı.
@@ -104,6 +111,44 @@ internal class NabizTracingProxy : DispatchProxy
             throw;
         }
     }
+
+    /// <summary>
+    /// Metodun span adını belirler; ölçülmeyecekse null döner.
+    /// </summary>
+    private string? ResolveSpanName(MethodInfo method)
+    {
+        // Hedefteki gerçek metodu bul: attribute'lar çoğunlukla arayüze değil
+        // uygulamaya konur.
+        var implementation = FindImplementation(method);
+
+        if (HasIgnore(method) || HasIgnore(implementation)) return null;
+        if (HasIgnore(method.DeclaringType) || HasIgnore(_target.GetType())) return null;
+
+        var trace = implementation?.GetCustomAttribute<NabizTraceAttribute>()
+                    ?? method.GetCustomAttribute<NabizTraceAttribute>();
+        if (!string.IsNullOrWhiteSpace(trace?.Name)) return trace!.Name;
+
+        return $"{_typeName}.{method.Name}";
+    }
+
+    private MethodInfo? FindImplementation(MethodInfo interfaceMethod)
+    {
+        try
+        {
+            var map = _target.GetType().GetInterfaceMap(interfaceMethod.DeclaringType!);
+            var index = Array.IndexOf(map.InterfaceMethods, interfaceMethod);
+            return index >= 0 ? map.TargetMethods[index] : null;
+        }
+        catch
+        {
+            // Açık arayüz uygulamaları ve bazı jenerik durumlar eşlenemeyebilir;
+            // bu durumda arayüzdeki attribute'a düşülür.
+            return null;
+        }
+    }
+
+    private static bool HasIgnore(MemberInfo? member) =>
+        member?.GetCustomAttribute<NabizIgnoreAttribute>() is not null;
 
     private object? InvokeTarget(MethodInfo method, object?[]? args)
     {

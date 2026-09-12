@@ -1,3 +1,4 @@
+using Nabiz.Agent;
 using Npgsql;
 
 namespace Shop.Servisler;
@@ -16,6 +17,7 @@ public interface IFiyatServisi
 {
     decimal BirimFiyat(string urunKodu);
     Task<decimal> KampanyaUygulaAsync(decimal tutar);
+    bool GecerliAdet(int adet);
 }
 
 public interface IStokServisi
@@ -33,6 +35,7 @@ public sealed class SepetServisi(
 {
     public async Task<object> SiparisOzetiAsync(int adet)
     {
+        for (var i = 0; i < 50; i++) fiyat.GecerliAdet(adet);   // ölçülmemeli
         var birim = fiyat.BirimFiyat("URN-1");
         var tutar = await fiyat.KampanyaUygulaAsync(birim * adet);
         var mevcut = await stok.StokSayisiAsync();
@@ -43,6 +46,12 @@ public sealed class SepetServisi(
 
 public sealed class FiyatServisi : IFiyatServisi
 {
+    // Her istekte defalarca çağrılan minik bir kontrol: ölçüm maliyeti işin
+    // kendisinden büyük olurdu.
+    [NabizIgnore]
+    public bool GecerliAdet(int adet) => adet > 0 && adet < 1000;
+
+    [NabizTrace(Name = "birim fiyat oku")]
     public decimal BirimFiyat(string urunKodu)
     {
         Thread.Sleep(11);

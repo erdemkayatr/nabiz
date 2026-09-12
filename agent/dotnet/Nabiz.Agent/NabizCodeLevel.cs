@@ -75,8 +75,25 @@ public static class NabizCodeLevel
     public static IServiceCollection AddNabizCodeLevel(
         this IServiceCollection services, Action<CodeLevelOptions>? configure = null)
     {
-        var options = new CodeLevelOptions();
+        // Önce nabiz.json'daki codeLevel bölümü, sonra koddaki callback.
+        // Kod son sözü söyler: derleyicinin gördüğü ayar, dosyadakinden daha
+        // açık bir niyettir.
+        var settings = NabizAgent.Options?.CodeLevel ?? new NabizOptions.CodeLevelSettings();
+        var options = new CodeLevelOptions
+        {
+            CaptureAllocations = settings.CaptureAllocations,
+            CaptureThread = settings.CaptureThread,
+            CaptureParameterTypes = settings.CaptureParameterTypes,
+        };
+        options.IncludeNamespaces.AddRange(settings.IncludeNamespaces);
+        options.ExcludeNamespaces.AddRange(settings.ExcludeNamespaces);
         configure?.Invoke(options);
+
+        if (!settings.Enabled)
+        {
+            Log("kod seviyesi ölçümü yapılandırmada kapalı");
+            return services;
+        }
 
         if (options.IncludeNamespaces.Count == 0)
         {
@@ -85,19 +102,49 @@ public static class NabizCodeLevel
         }
 
         var wrapped = 0;
+        var skippedClasses = new List<string>();
+
         // Listeyi dolaşırken değiştirdiğimiz için kopya üzerinden gidiyoruz.
         foreach (var descriptor in services.ToList())
         {
+            if (IsClassRegistrationInScope(descriptor, options))
+            {
+                skippedClasses.Add(descriptor.ServiceType.Name);
+                continue;
+            }
             if (!ShouldWrap(descriptor, options)) continue;
             if (Replace(services, descriptor, options)) wrapped++;
         }
 
-        if (NabizAgent.Options?.Debug == true)
+        Log($"{wrapped} servis sarmalandı (namespace: {string.Join(", ", options.IncludeNamespaces)})");
+
+        // Sessizce atlamak yerine söylüyoruz: "neden bu servisin metotlarını
+        // göremiyorum" sorusunun cevabı loglarda dursun.
+        if (skippedClasses.Count > 0)
         {
-            Console.WriteLine($"[nabiz] kod seviyesi: {wrapped} servis sarmalandı " +
-                              $"(namespace: {string.Join(", ", options.IncludeNamespaces)})");
+            Console.Error.WriteLine(
+                $"[nabiz] {skippedClasses.Count} servis sınıf olarak kayıtlı olduğu için ölçülemedi: " +
+                $"{string.Join(", ", skippedClasses.Take(10))}" +
+                (skippedClasses.Count > 10 ? " …" : "") +
+                ". Arayüz üzerinden kaydedin ya da IL weaving sürümünü bekleyin.");
         }
         return services;
+    }
+
+    // Kapsamdaki ama arayüzsüz kayıtlar: proxy kurulamaz.
+    private static bool IsClassRegistrationInScope(ServiceDescriptor d, CodeLevelOptions options)
+    {
+        if (d.ServiceType.IsInterface) return false;
+        var name = d.ServiceType.FullName;
+        if (name is null) return false;
+        if (AlwaysExcluded.Any(p => name.StartsWith(p, StringComparison.Ordinal))) return false;
+        if (options.ExcludeNamespaces.Any(p => name.StartsWith(p, StringComparison.Ordinal))) return false;
+        return options.IncludeNamespaces.Any(p => name.StartsWith(p, StringComparison.Ordinal));
+    }
+
+    private static void Log(string message)
+    {
+        if (NabizAgent.Options?.Debug == true) Console.WriteLine($"[nabiz] kod seviyesi: {message}");
     }
 
     private static string? RootNamespace()

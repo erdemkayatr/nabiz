@@ -34,7 +34,13 @@ yazılmaz; sonraki derlemeler değişikliğinizi korur.
 | `environment` | — | `prod`, `staging`, `dev` |
 | `sampleRatio` | `1.0` | 0.0–1.0 arası örnekleme |
 | `enabled` | `true` | `false` ise agent hiç başlamaz |
-| `additionalSources` | `["Npgsql"]` | Ek ActivitySource adları |
+| `additionalSources` | *(yaygın kütüphaneler)* | Ek ActivitySource adları |
+| `codeLevel.enabled` | `true` | Otomatik metot ölçümü |
+| `codeLevel.includeNamespaces` | *(giriş assembly kökü)* | Ölçülecek namespace'ler |
+| `codeLevel.excludeNamespaces` | `[]` | Dışlanacak namespace'ler |
+| `codeLevel.captureAllocations` | `true` | Span başına ayrılan bellek |
+| `codeLevel.captureThread` | `true` | Thread kimliği ve async geçişi |
+| `codeLevel.captureParameterTypes` | `true` | Parametre tipleri (değerler asla) |
 | `headers` | `{}` | OTLP başlıkları (ingress kimlik doğrulaması) |
 | `captureDbStatement` | `true` | `false` ise SQL metni span'den silinir |
 | `captureCodeLocation` | `true` | Hatalı span'lere dosya:satır eklenir |
@@ -98,20 +104,57 @@ demektir.
 startup, uygulamanın kendi servis kayıtlarından **önce** çalışıyor ve
 sarmalanacak servisleri henüz göremiyor.
 
+### Gürültüyü susturma
+
+Tüm servisleri ölçüme aldığınızda bazı metotlar gürültüden başka bir şey
+üretmez: sıkı döngüde çağrılan minik kontroller, her istekte yüzlerce kez
+koşan erişimciler. Bunları işaretleyin:
+
+```csharp
+[NabizIgnore]
+public bool GecerliAdet(int adet) => adet > 0 && adet < 1000;
+
+[NabizTrace(Name = "birim fiyat oku")]
+public decimal BirimFiyat(string urunKodu) { ... }
+```
+
+`[NabizIgnore]` metoda ya da tipe konabilir. `[NabizTrace]` span'e okunur bir
+ad verir. İkisi birlikte bulunursa dışlama kazanır: susturma kararı her zaman
+ölçme kararını yener.
+
 ### Sınırlar
 
 - Yalnızca **arayüz üzerinden** kayıtlı servisler sarmalanır. Sınıf olarak
   kayıtlı servisler için metotların `virtual` olması gerekirdi; o da sessizce
-  eksik ölçüm üretir.
+  eksik ölçüm üretir. Kapsamdaki sınıf kayıtları atlanır ve açılışta listelenir
+  — "neden bu servisi göremiyorum" sorusu loglarda cevaplanmalı.
+- **Metodun içindeki kendi kodunu göremez.** Sarmalama servis sınırındadır;
+  bir metodun içinde çağırdığınız private yardımcı görünmez. Bunun için
+  derleme anında IL weaving gerekiyor (aşağıya bakın).
 - `ValueTask` döndüren metotlarda yalnızca senkron kısım ölçülür. `AsTask()`
   çağırmak çağıranın elinden sonucu alırdı; span bu durumu açıkça işaretler.
 - Varsayılan olarak yalnızca giriş assembly'sinin kök namespace'i taranır.
   Farklı bir kapsam için: `AddNabizCodeLevel(o => o.IncludeNamespaces.Add("Shop."))`
 
+## Yol haritası: IL weaving
+
+Metot içindeki private çağrıları da görmek derleme anında IL'e dokunmayı
+gerektiriyor. Tasarım kararlaştırıldı, henüz yazılmadı:
+
+- Kapsam `Program.cs`'den seçilir: **tüm uygulama assembly'si** ya da
+  **yalnızca `[NabizTrace]` işaretliler**.
+- Tüm assembly modunda istemediğiniz metotları `[NabizIgnore]` ile dışlarsınız
+  — bu attribute bugün de çalışıyor, weaving geldiğinde aynı anlamı taşıyacak.
+- Deneysel bayrak arkasında ayrı bir dalda geliştirilecek; olgunlaşana kadar
+  varsayılan değişmeyecek.
+
 ## Neler toplanır
 
-ASP.NET Core istekleri, `HttpClient` çağrıları ve `additionalSources`
-listesindeki kaynaklar (varsayılan olarak Npgsql). Trace bağlamı `traceparent`
+ASP.NET Core istekleri, `HttpClient` çağrıları, SQL Server sorguları ve
+kendi `ActivitySource`'unu yayınlayan yaygın kütüphaneler: PostgreSQL
+(Npgsql), MySQL, Kafka, RabbitMQ, MassTransit, Elasticsearch, MongoDB,
+Quartz, YARP, Azure SDK. Bu kaynakları dinlemek bedavadır — kütüphane yoksa
+kaynak hiç yayın yapmaz. Trace bağlamı `traceparent`
 başlığıyla servisler arasında taşınır; nabiz servis topolojisini bu
 ilişkilerden çıkarır.
 

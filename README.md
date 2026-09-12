@@ -110,6 +110,9 @@ builder.Services.AddScoped<ISepetServisi, SepetServisi>();
 builder.Services.AddNabizCodeLevel();   // kayıtlardan SONRA
 ```
 
+Gürültülü metotları `[NabizIgnore]` ile susturur, span adlarını
+`[NabizTrace(Name = "...")]` ile okunur yaparsınız.
+
 **Seçmeli:** ölçmek istediğiniz bloğu işaretleyin; dosya ve satır bilgisi
 derleyiciden bedavaya gelir.
 
@@ -355,9 +358,14 @@ make fmt     # gofmt + go vet
   karar veriliyor. "Önce topla, yavaş/hatalı olanı sakla" henüz yok.
 - **Sürekli CPU profilleme.** Dynatrace'in yaptığı gibi çalışan süreçten
   periyodik yığın örneği alıp metot bazında CPU dağılımı çıkarmak yok.
-- **DI dışındaki metotlar.** Otomatik ölçüm arayüz üzerinden kayıtlı
-  servisleri kapsar; statik yardımcılar ve `new` ile üretilen nesneler için
-  `NabizTracer` gerekir.
+- **Metot içindeki kendi kodu.** Sarmalama servis sınırındadır: bir metodun
+  içinde çağırdığınız private yardımcı görünmez. Bunun için derleme anında IL
+  weaving gerekiyor. Tasarımı kararlaştırıldı — kapsam `Program.cs`'den
+  seçilecek (tüm assembly ya da yalnızca `[NabizTrace]` işaretliler), tüm
+  assembly modunda `[NabizIgnore]` ile metot dışlanacak — ama deneysel bayrak
+  arkasında ayrı bir dalda geliştirilecek.
+- **Sınıf olarak kayıtlı servisler.** Arayüzsüz kayıtlar proxy'lenemez;
+  atlananlar açılışta listelenir.
 - **CPU süresi ve bekleme süresi ayrımı.** Span'ler duvar saati süresini
   ölçer; "CPU'da mı geçti, kilitte mi bekledi" ayrımı yok.
 - **SSO / LDAP.** Kimlik yalnızca e-posta + parola. OIDC bağlamak için

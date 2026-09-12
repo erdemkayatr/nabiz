@@ -42,9 +42,38 @@ public sealed class NabizOptions
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Dinlenecek ek ActivitySource adları.</summary>
+    /// <summary>
+    /// Dinlenecek ek ActivitySource adları.
+    /// </summary>
+    /// <remarks>
+    /// Varsayılan liste, kendi ActivitySource'unu yayınlayan yaygın
+    /// kütüphaneleri kapsar. Bunları dinlemek bedavadır: kütüphane yoksa
+    /// kaynak hiç yayın yapmaz. Böylece metot içindeki veritabanı, kuyruk ve
+    /// arama çağrıları ek paket gerekmeden görünür olur.
+    /// </remarks>
     [JsonPropertyName("additionalSources")]
-    public string[] AdditionalSources { get; set; } = new[] { "Npgsql" };
+    public string[] AdditionalSources { get; set; } = DefaultSources;
+
+    /// <summary>Varsayılan olarak dinlenen kütüphane kaynakları.</summary>
+    public static readonly string[] DefaultSources =
+    {
+        "Npgsql",                     // PostgreSQL
+        "MySqlConnector",             // MySQL
+        "Confluent.Kafka",            // Kafka
+        "MassTransit",                // mesajlaşma
+        "RabbitMQ.Client.Publisher",  // RabbitMQ 7+
+        "RabbitMQ.Client.Subscriber",
+        "Elastic.Transport",          // Elasticsearch
+        "MongoDB.Driver.Core.Extensions.DiagnosticSources",
+        "Quartz",                     // zamanlanmış işler
+        "Yarp.ReverseProxy",          // ters vekil
+        "Azure.Core",                 // Azure SDK
+        "Microsoft.EntityFrameworkCore",
+    };
+
+    /// <summary>Kod seviyesi otomatik ölçüm ayarları.</summary>
+    [JsonPropertyName("codeLevel")]
+    public CodeLevelSettings CodeLevel { get; set; } = new();
 
     /// <summary>OTLP isteklerine eklenecek başlıklar (ingress kimlik doğrulaması vb.).</summary>
     [JsonPropertyName("headers")]
@@ -71,6 +100,36 @@ public sealed class NabizOptions
     /// <summary>Yapılandırmanın okunduğu dosya; bulunamadıysa null.</summary>
     [JsonIgnore]
     public string? SourceFile { get; internal set; }
+
+    /// <summary>
+    /// nabiz.json içindeki <c>codeLevel</c> bölümü.
+    /// </summary>
+    public sealed class CodeLevelSettings
+    {
+        /// <summary>AddNabizCodeLevel() çağrıldığında ölçüm açık mı.</summary>
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>Ölçülecek namespace önekleri. Boşsa giriş assembly'sinin kökü.</summary>
+        [JsonPropertyName("includeNamespaces")]
+        public string[] IncludeNamespaces { get; set; } = Array.Empty<string>();
+
+        /// <summary>Dışlanacak namespace önekleri.</summary>
+        [JsonPropertyName("excludeNamespaces")]
+        public string[] ExcludeNamespaces { get; set; } = Array.Empty<string>();
+
+        /// <summary>Span başına ayrılan bellek ölçülsün mü.</summary>
+        [JsonPropertyName("captureAllocations")]
+        public bool CaptureAllocations { get; set; } = true;
+
+        /// <summary>Thread kimliği ve async geçişi kaydedilsin mi.</summary>
+        [JsonPropertyName("captureThread")]
+        public bool CaptureThread { get; set; } = true;
+
+        /// <summary>Parametre tipleri kaydedilsin mi. Değerler asla kaydedilmez.</summary>
+        [JsonPropertyName("captureParameterTypes")]
+        public bool CaptureParameterTypes { get; set; } = true;
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

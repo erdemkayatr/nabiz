@@ -124,6 +124,10 @@ public static class NabizAgent
             // trace'in içinde durur, ayrı bir log aramaya gerek kalmaz.
             .AddAspNetCoreInstrumentation(o => o.RecordException = true)
             .AddHttpClientInstrumentation(o => o.RecordException = true)
+            // SQL Server / Azure SQL. Sorgu metnini gizleme işi tek yerden,
+            // DropSqlTextProcessor üzerinden yürüyor: sağlayıcıya göre değişen
+            // ayar adlarına bağlı kalmıyoruz ve kural her veritabanı için aynı.
+            .AddSqlClientInstrumentation()
             // Uygulamanın NabizTracer ile açtığı metot seviyesi span'ler.
             .AddSource(NabizTracer.SourceName)
             // AddNabizCodeLevel() ile sarmalanan servislerin metot span'leri.
