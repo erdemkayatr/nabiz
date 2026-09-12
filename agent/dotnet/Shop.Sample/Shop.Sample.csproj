@@ -10,7 +10,10 @@
     <PackageReference Include="Npgsql" Version="9.0.3" />
     <!-- Tek satır. Enstrümantasyon, config üretimi ve otomatik başlatma
          bu paketten geliyor. -->
-    <PackageReference Include="Nabiz.Agent" Version="0.4.0" />
+    <PackageReference Include="Nabiz.Agent" Version="0.5.0" />
+    <!-- Talep üzerine CPU/bellek dump'ı. Ayrı paket: tanılama IPC yığını
+         yalnızca ihtiyacı olan uygulamalara girsin. -->
+    <PackageReference Include="Nabiz.Agent.Diagnostics" Version="0.5.0" />
   </ItemGroup>
 
 </Project>

@@ -75,6 +75,12 @@ public sealed class NabizOptions
     [JsonPropertyName("codeLevel")]
     public CodeLevelSettings CodeLevel { get; set; } = new();
 
+    /// <summary>
+    /// Talep üzerine dump alma ayarları (Nabiz.Agent.Diagnostics paketi).
+    /// </summary>
+    [JsonPropertyName("diagnostics")]
+    public DiagnosticsSettings Diagnostics { get; set; } = new();
+
     /// <summary>OTLP isteklerine eklenecek başlıklar (ingress kimlik doğrulaması vb.).</summary>
     [JsonPropertyName("headers")]
     public Dictionary<string, string> Headers { get; set; } = new();
@@ -129,6 +135,54 @@ public sealed class NabizOptions
         /// <summary>Parametre tipleri kaydedilsin mi. Değerler asla kaydedilmez.</summary>
         [JsonPropertyName("captureParameterTypes")]
         public bool CaptureParameterTypes { get; set; } = true;
+    }
+
+    /// <summary>
+    /// nabiz.json içindeki <c>diagnostics</c> bölümü.
+    /// </summary>
+    /// <remarks>
+    /// Bellek dump'ı sürecin tüm belleğini diske yazar: bağlantı dizeleri,
+    /// oturum jetonları, kişisel veriler ve parolalar dahil. Bu yüzden
+    /// varsayılan KAPALI ve jeton olmadan açılmıyor.
+    /// </remarks>
+    public sealed class DiagnosticsSettings
+    {
+        /// <summary>Dump uçları açık mı. Varsayılan kapalı.</summary>
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; set; }
+
+        /// <summary>Uçların bağlanacağı yol öneki.</summary>
+        [JsonPropertyName("path")]
+        public string Path { get; set; } = "/nabiz/diag";
+
+        /// <summary>
+        /// X-Nabiz-Token başlığında beklenen değer. Boşsa uçlar hiç açılmaz.
+        /// </summary>
+        [JsonPropertyName("token")]
+        public string Token { get; set; } = "";
+
+        /// <summary>Dosyaların yazılacağı dizin. Boşsa geçici dizin.</summary>
+        [JsonPropertyName("outputDirectory")]
+        public string OutputDirectory { get; set; } = "";
+
+        /// <summary>Saklanacak en fazla dosya sayısı; eskiler silinir.</summary>
+        [JsonPropertyName("maxFiles")]
+        public int MaxFiles { get; set; } = 5;
+
+        /// <summary>CPU profili için izin verilen en uzun süre.</summary>
+        [JsonPropertyName("maxCpuSeconds")]
+        public int MaxCpuSeconds { get; set; } = 120;
+
+        /// <summary>
+        /// Üretilen dosyalar HTTP ile indirilebilsin mi.
+        /// </summary>
+        /// <remarks>
+        /// Kapalıyken dosyalar yalnızca diskte durur ve kubectl cp gibi
+        /// araçlarla alınır. Açmak, jetonu ele geçiren birinin süreç belleğini
+        /// indirebilmesi demektir.
+        /// </remarks>
+        [JsonPropertyName("allowDownload")]
+        public bool AllowDownload { get; set; }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()

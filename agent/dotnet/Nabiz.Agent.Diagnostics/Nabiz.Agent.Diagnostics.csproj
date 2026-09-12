@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Nabiz.Agent.Diagnostics</PackageId>
+    <Version>0.5.0</Version>
+    <Authors>nabiz</Authors>
+    <Description>
+      nabiz agent'ı için talep üzerine CPU profili ve bellek dump'ı. Ayrı bir
+      paket: tanılama IPC yığını yalnızca ihtiyacı olan uygulamalara girsin.
+    </Description>
+    <PackageTags>apm;profiling;dump;diagnostics;nabiz</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nabiz.Agent" Version="0.5.0" />
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.745401" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

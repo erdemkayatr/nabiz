@@ -1,4 +1,5 @@
 using Nabiz.Agent;
+using Nabiz.Agent.Diagnostics;
 using Npgsql;
 using Shop.Servisler;
 
@@ -22,6 +23,10 @@ builder.Services.AddScoped<IKatalogServisi, KatalogServisi>();
 // Tek satır. Yukarıdaki üç servisin BÜTÜN metotları, kodlarına
 // dokunulmadan ölçülmeye başlar.
 builder.Services.AddNabizCodeLevel();
+
+// Tanılama uçları. nabiz.json'daki diagnostics bölümü kapalıysa hiçbir uç
+// açılmaz; jeton verilmeden de açılmaz.
+builder.Services.AddNabizDiagnostics();
 
 var app = builder.Build();
 

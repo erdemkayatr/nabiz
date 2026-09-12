@@ -66,6 +66,7 @@ bir tavan. Pratikte darboğaz ClickHouse yazma hızıdır, topoloji hesabı değ
 | Denetim düzlemi | PostgreSQL | Kullanıcı, rol grubu, proje, oturum |
 | Agent (k8s) | OpenTelemetry .NET auto-instrumentation | Operator enjekte eder, kod değişmez |
 | Agent (NuGet) | `Nabiz.Agent` | Pakete referans yeterli; config derlemede oluşur |
+| Dump (NuGet) | `Nabiz.Agent.Diagnostics` | Talep üzerine CPU profili ve bellek dump'ı |
 
 Dil seçimi Go: Kubernetes ekosisteminin (client-go, admission webhook'ları) ve
 OTLP'nin ana dili. Rust daha yüksek tavan verirdi ama darboğaz bu katmanda
@@ -95,6 +96,43 @@ kendiliğinden devreye girer. Ayrıntılar: [agent/dotnet/Nabiz.Agent/README.md]
 Ortam değişkenleri dosyayı ezer (`NABIZ_ENDPOINT`, `NABIZ_SERVICE_NAME`, …).
 Kubernetes'te aynı imaj farklı ortamlara gittiği için imajın içindeki dosyayı
 değiştirmek mümkün değildir; dağıtımın söylediği kazanır.
+
+## Talep üzerine dump
+
+Uygulamaya bir istek atıp CPU profili ya da bellek dump'ı alabilirsiniz —
+ayrı bir paketle:
+
+```bash
+dotnet add package Nabiz.Agent.Diagnostics
+```
+
+```csharp
+builder.Services.AddNabizDiagnostics();
+```
+
+```bash
+curl -X POST -H "X-Nabiz-Token: $TOKEN" \
+  "http://uygulama:5000/nabiz/diag/cpu?seconds=20"
+
+curl -X POST -H "X-Nabiz-Token: $TOKEN" \
+  "http://uygulama:5000/nabiz/diag/memory?type=heap"
+```
+
+CPU profili ham **nettrace**'tir ve bilerek çözümlenmiyor: PerfView, Visual
+Studio ve `dotnet-trace convert` bu biçimi zaten okuyor, kendi
+çözümleyicimizi yazmak hatalarını da üstlenmek olurdu. Yerel bir ölçümde
+5 saniyelik profil 7.1 MB, 733 kare üretti ve içinde uygulamanın kendi
+metotları göründü.
+
+> **Bellek dump'ı sürecin tüm belleğini diske yazar** — bağlantı dizeleri,
+> oturum jetonları, parolalar, müşteri verisi dahil. Bu yüzden varsayılan
+> **kapalı** ve **en az 16 karakterlik bir jeton** olmadan açılmıyor. İndirme
+> ayrı bir anahtardır; kapalıyken dosya yalnızca diskte durur.
+
+Dump alınırken süreç **askıya alınır**: 540 MB'lık bir dump 3.8 saniye sürdü
+ve o süre boyunca uygulama istek işlemedi. Üretimde trafiği kesilmiş bir
+örnekte alın. Ayrıntılar:
+[agent/dotnet/Nabiz.Agent.Diagnostics/README.md](agent/dotnet/Nabiz.Agent.Diagnostics/README.md).
 
 ## Kod seviyesi zamanlama
 
@@ -356,8 +394,11 @@ make fmt     # gofmt + go vet
   türetiliyor, ayrıca metrik toplanmıyor.
 - **Tail-based sampling.** Örnekleme agent tarafında, trace başına baştan
   karar veriliyor. "Önce topla, yavaş/hatalı olanı sakla" henüz yok.
-- **Sürekli CPU profilleme.** Dynatrace'in yaptığı gibi çalışan süreçten
-  periyodik yığın örneği alıp metot bazında CPU dağılımı çıkarmak yok.
+- **Sürekli CPU profilleme.** Dump paketiyle talep üzerine profil alınıyor ama
+  bu sürekli değil; arka planda dönen ve trace'lerle ilişkilendirilen bir
+  profilci yok.
+- **Dump'ların arayüzden alınması.** Şu an uygulamaya doğrudan istek
+  atıyorsunuz; nabiz arayüzünden tetikleme ve dosyaları orada toplama yok.
 - **Metot içindeki kendi kodu.** Sarmalama servis sınırındadır: bir metodun
   içinde çağırdığınız private yardımcı görünmez. Bunun için derleme anında IL
   weaving gerekiyor. Tasarımı kararlaştırıldı — kapsam `Program.cs`'den
