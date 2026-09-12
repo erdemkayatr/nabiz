@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+
+# Bu imaj bir uygulama çalıştırmaz: yalnızca OpenTelemetry .NET
+# auto-instrumentation dosyalarını taşır. Operator'ın enjekte ettiği init
+# container bunu paylaşımlı bir emptyDir'e kopyalar.
+#
+# glibc ve musl varyantlarının ikisi de içeride: hangisinin kullanılacağına
+# pod'daki nabiz.io/libc annotation'ı karar verir.
+ARG OTEL_AUTO_VERSION=1.16.0
+
+FROM alpine:3.21 AS fetch
+ARG OTEL_AUTO_VERSION
+RUN apk add --no-cache curl unzip
+WORKDIR /otel
+RUN set -eux; \
+    base="https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases/download/v${OTEL_AUTO_VERSION}"; \
+    for variant in glibc musl; do \
+      for arch in x64 arm64; do \
+        curl -sSfL -o "/tmp/${variant}-${arch}.zip" \
+          "${base}/opentelemetry-dotnet-instrumentation-linux-${variant}-${arch}.zip"; \
+        unzip -q -o "/tmp/${variant}-${arch}.zip" -d /otel; \
+        rm "/tmp/${variant}-${arch}.zip"; \
+      done; \
+    done; \
+    ls -d /otel/linux-*
+
+FROM alpine:3.21
+RUN adduser -D -u 10001 nabiz
+COPY --from=fetch --chown=10001:10001 /otel /otel
+USER 10001
+# Init container komutu operator tarafından verilir; bu ENTRYPOINT yalnızca
+# imajı elle incelemek içindir.
+ENTRYPOINT ["/bin/sh"]

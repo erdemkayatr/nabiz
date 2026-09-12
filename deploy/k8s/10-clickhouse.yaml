@@ -1,0 +1,58 @@
+# Tek node ClickHouse. Değerlendirme ve küçük kurulumlar için yeterli;
+# üretimde Altinity ClickHouse Operator ile replikalı kurmak gerekir.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nabiz-clickhouse
+  namespace: nabiz
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: nabiz-clickhouse
+  ports:
+    - { name: native, port: 9000, targetPort: 9000 }
+    - { name: http,   port: 8123, targetPort: 8123 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nabiz-clickhouse
+  namespace: nabiz
+spec:
+  serviceName: nabiz-clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabiz-clickhouse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabiz-clickhouse
+    spec:
+      securityContext:
+        fsGroup: 101
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.3-alpine
+          env:
+            - { name: CLICKHOUSE_SKIP_USER_SETUP, value: "1" }
+          ports:
+            - { name: native, containerPort: 9000 }
+            - { name: http,   containerPort: 8123 }
+          readinessProbe:
+            httpGet: { path: /ping, port: 8123 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests: { cpu: "1",  memory: 4Gi }
+            limits:   { cpu: "4",  memory: 8Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 100Gi

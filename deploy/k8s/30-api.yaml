@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nabiz-api
+  namespace: nabiz
+spec:
+  selector:
+    app.kubernetes.io/name: nabiz-api
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nabiz-api
+  namespace: nabiz
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabiz-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabiz-api
+    spec:
+      containers:
+        - name: api
+          image: nabiz/api:dev
+          env:
+            - { name: NABIZ_CLICKHOUSE_ADDRS,    value: "nabiz-clickhouse.nabiz.svc:9000" }
+            - { name: NABIZ_CLICKHOUSE_DATABASE, value: "nabiz" }
+            # Denetim düzlemi. Parola Secret'tan gelir, DSN'e gömülmez.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: nabiz-postgres, key: POSTGRES_PASSWORD }
+            - name: NABIZ_POSTGRES_DSN
+              value: "postgres://nabiz:$(PGPASSWORD)@nabiz-postgres.nabiz.svc:5432/nabiz?sslmode=disable"
+            # NABIZ_ADMIN_EMAIL / NABIZ_ADMIN_PASSWORD bilerek verilmiyor.
+            # İlk açılışta nabiz rastgele bir parola üretip loga bir kez
+            # yazar: "kubectl logs deploy/nabiz-api | grep parola"
+            - { name: NABIZ_ADMIN_EMAIL, value: "admin@nabiz.local" }
+          ports:
+            - { containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }

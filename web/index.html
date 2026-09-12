@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="tr" id="html-root">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nabiz</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ==================== GİRİŞ ==================== -->
+<section id="login-screen" hidden>
+  <form class="login-card" id="login-form">
+    <div class="login-brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 12h4l3-8 4 16 3-8h6"/>
+      </svg>
+      <span>nabiz</span>
+    </div>
+    <h1 data-i18n="login.title">nabiz'e giriş</h1>
+    <p class="hint" data-i18n="login.subtitle">Devam etmek için hesabınızla giriş yapın</p>
+
+    <div class="login-error" id="login-error" hidden></div>
+
+    <label class="field">
+      <span class="field-label" data-i18n="login.email">E-posta</span>
+      <input type="email" id="login-email" name="email" autocomplete="username" required autofocus>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="login.password">Parola</span>
+      <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn primary" id="login-submit" data-i18n="login.submit">Giriş yap</button>
+  </form>
+</section>
+
+<!-- ==================== ÜST ÇUBUK ==================== -->
+<header id="app-header" hidden>
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 12h4l3-8 4 16 3-8h6"/>
+    </svg>
+    nabiz
+  </div>
+  <nav>
+    <button data-view="topology" data-i18n="nav.topology" aria-current="page">Topoloji</button>
+    <button data-view="services" data-i18n="nav.services">Servisler</button>
+    <button data-view="traces" data-i18n="nav.traces">Trace'ler</button>
+    <button data-view="admin" data-i18n="nav.admin" hidden>Yönetim</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="controls">
+    <span id="project-wrap" hidden></span>
+    <select id="lang" aria-label="Language">
+      <option value="tr">Türkçe</option>
+      <option value="en">English</option>
+    </select>
+    <select id="range" data-i18n-aria="a11y.range">
+      <option value="15m" data-i18n="range.15m">Son 15 dakika</option>
+      <option value="1h" selected data-i18n="range.1h">Son 1 saat</option>
+      <option value="6h" data-i18n="range.6h">Son 6 saat</option>
+      <option value="24h" data-i18n="range.24h">Son 24 saat</option>
+    </select>
+    <button class="btn" id="refresh" data-i18n="btn.refresh">Yenile</button>
+    <span class="live"><span class="dot" id="livedot"></span><span id="livetext">otomatik</span></span>
+    <div class="user-wrap">
+      <button class="user-chip" id="user-chip" aria-haspopup="true"></button>
+      <div class="user-menu" id="user-menu" hidden></div>
+    </div>
+  </div>
+</header>
+
+<main id="app-main" hidden>
+  <!-- ==================== TOPOLOJİ ==================== -->
+  <section class="view" id="view-topology">
+    <div class="panel">
+      <div class="panel-head">
+        <h2 data-i18n="topo.title">Servis topolojisi</h2>
+        <span class="hint" data-i18n="topo.hint">isteklerden çıkarıldı — elle tanımlanmadı</span>
+        <div class="spacer"></div>
+        <select id="level" data-i18n-aria="a11y.level">
+          <option value="service" data-i18n="level.service">Servis seviyesi</option>
+          <option value="workload" data-i18n="level.workload">Kubernetes workload</option>
+          <option value="namespace" data-i18n="level.namespace">Kubernetes namespace</option>
+        </select>
+      </div>
+
+      <div id="canvas-wrap">
+        <svg id="graph" role="img" aria-label="topology"></svg>
+        <div class="zoom-bar">
+          <button id="zoom-in" data-i18n-title="zoom.in" data-i18n-aria="zoom.in">+</button>
+          <button id="zoom-out" data-i18n-title="zoom.out" data-i18n-aria="zoom.out">&minus;</button>
+          <button id="zoom-fit" class="wide" data-i18n-title="zoom.fit" data-i18n="zoom.fitShort">sığdır</button>
+        </div>
+        <aside id="detail" hidden></aside>
+      </div>
+
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--accent)"></i><b data-i18n="type.service">servis</b></span>
+        <span><i class="swatch" style="background:var(--db)"></i><b data-i18n="type.database">veritabanı</b></span>
+        <span><i class="swatch" style="background:var(--mq)"></i><b data-i18n="type.messaging">kuyruk</b></span>
+        <span><i class="swatch" style="background:var(--ext)"></i><b data-i18n="type.external">dış bağımlılık</b></span>
+        <span><i class="swatch" style="background:var(--err)"></i><b data-i18n="legend.errorRate">hata oranı &gt; %1</b></span>
+        <span data-i18n="legend.size">daire boyutu = trafik</span>
+        <span data-i18n="legend.drag">düğümü sürükleyin</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== SERVİSLER ==================== -->
+  <section class="view" id="view-services" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 data-i18n="services.title">Servisler</h2>
+        <span class="hint" data-i18n="services.hint">giriş span'lerinden hesaplanan RED metrikleri</span>
+      </div>
+      <div id="services-body"></div>
+    </div>
+  </section>
+
+  <!-- ==================== TRACE'LER ==================== -->
+  <section class="view" id="view-traces" hidden>
+    <div class="panel" id="trace-list-panel">
+      <div class="panel-head">
+        <h2 data-i18n="traces.title">Trace'ler</h2>
+        <div class="spacer"></div>
+        <div class="filters">
+          <input type="text" id="f-service" data-i18n-ph="filter.service" data-i18n-aria="filter.service">
+          <input type="number" id="f-minms" min="0" data-i18n-ph="filter.minMs" data-i18n-aria="filter.minMs">
+          <label class="check"><input type="checkbox" id="f-errors"> <span data-i18n="filter.onlyErrors">sadece hatalılar</span></label>
+          <button class="btn" id="f-apply" data-i18n="btn.search">Ara</button>
+        </div>
+      </div>
+      <div id="traces-body"></div>
+    </div>
+
+    <div class="panel" id="trace-detail-panel" hidden>
+      <div class="panel-head">
+        <button class="back" id="trace-back" data-i18n="btn.backToList">&larr; listeye dön</button>
+        <div class="spacer"></div>
+        <span class="mono hint" id="trace-id-label"></span>
+      </div>
+      <div id="trace-detail-body"></div>
+    </div>
+  </section>
+
+  <!-- ==================== YÖNETİM ==================== -->
+  <section class="view" id="view-admin" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="subtabs" id="admin-tabs">
+          <button data-tab="users" data-i18n="admin.users" onclick="location.hash='admin/users'">Kullanıcılar</button>
+          <button data-tab="role-groups" data-i18n="admin.roleGroups" onclick="location.hash='admin/role-groups'">Rol grupları</button>
+          <button data-tab="projects" data-i18n="admin.projects" onclick="location.hash='admin/projects'">Projeler</button>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn primary" id="admin-new" hidden></button>
+      </div>
+      <div id="admin-body"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ==================== ORTAK DİYALOG ==================== -->
+<div class="dialog-backdrop" id="dialog" hidden>
+  <div class="dialog">
+    <div class="dialog-head">
+      <h2 id="dialog-title"></h2>
+      <button class="close" id="dialog-cancel" data-i18n-aria="btn.close" type="button">&times;</button>
+    </div>
+    <form id="dialog-form" class="dialog-body"></form>
+    <div class="dialog-error" id="dialog-error" hidden></div>
+    <div class="dialog-foot">
+      <button class="btn" type="button" id="dialog-cancel-2" data-i18n="btn.cancel" onclick="closeDialog()">Vazgeç</button>
+      <button class="btn primary" type="submit" form="dialog-form" id="dialog-submit">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<script src="topology.js"></script>
+<script src="admin.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

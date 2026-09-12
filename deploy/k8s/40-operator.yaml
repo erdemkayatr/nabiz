@@ -1,0 +1,135 @@
+# nabiz-operator: .NET pod'larına enstrümantasyonu otomatik enjekte eder.
+#
+# Kullanım: uygulamanın pod şablonuna tek bir annotation:
+#   metadata:
+#     annotations:
+#       nabiz.io/inject-dotnet: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nabiz-operator
+  namespace: nabiz
+---
+# Operator'ın tek ihtiyacı, açılışta ürettiği CA'yı kendi webhook
+# yapılandırmasına yazmak. Pod okuma/yazma yetkisi YOK: enjeksiyon admission
+# sırasında olur, sonradan pod düzenlemeye gerek kalmaz.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nabiz-operator
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    resourceNames: ["nabiz-dotnet-injector"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nabiz-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nabiz-operator
+subjects:
+  - kind: ServiceAccount
+    name: nabiz-operator
+    namespace: nabiz
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nabiz-operator
+  namespace: nabiz
+spec:
+  selector:
+    app.kubernetes.io/name: nabiz-operator
+  ports:
+    - { name: webhook, port: 443, targetPort: 9443 }
+    - { name: stats,   port: 8888, targetPort: 8888 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nabiz-operator
+  namespace: nabiz
+spec:
+  # Tek replika: her replika kendi CA'sını üretip caBundle'a yazar; iki
+  # replika birbirinin sertifikasını ezer. Yüksek erişilebilirlik gerekirse
+  # sertifikayı bir Secret'ta paylaştırmak gerekir.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabiz-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabiz-operator
+    spec:
+      serviceAccountName: nabiz-operator
+      containers:
+        - name: operator
+          image: nabiz/operator:dev
+          env:
+            - { name: NABIZ_NAMESPACE,             value: "nabiz" }
+            - { name: NABIZ_WEBHOOK_SERVICE,       value: "nabiz-operator" }
+            - { name: NABIZ_WEBHOOK_CONFIG,        value: "nabiz-dotnet-injector" }
+            - { name: NABIZ_COLLECTOR_ENDPOINT,    value: "http://nabiz-collector.nabiz.svc:4317" }
+            - { name: NABIZ_INSTRUMENTATION_IMAGE, value: "nabiz/dotnet-instrumentation:1.16.0" }
+            - { name: NABIZ_CLUSTER_NAME,          value: "" }
+            # Örnekleme agent tarafında: düşürülen span hiç serileştirilmez.
+            - { name: NABIZ_DEFAULT_SAMPLE_RATIO,  value: "1.0" }
+          ports:
+            - { name: webhook, containerPort: 9443 }
+            - { name: stats,   containerPort: 8888 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8888 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: nabiz-dotnet-injector
+webhooks:
+  - name: dotnet.nabiz.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Webhook erişilemezse pod yine de oluşur. Gözlemlenebilirlik aracı,
+    # uygulamanın ayağa kalkmasını engelleyemez.
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    reinvocationPolicy: Never
+    clientConfig:
+      service:
+        name: nabiz-operator
+        namespace: nabiz
+        path: /mutate
+        port: 443
+      # caBundle operator tarafından açılışta doldurulur.
+      caBundle: ""
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    # nabiz'in kendi bileşenleri enjeksiyon dışında kalsın.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["nabiz", "kube-system"]
+    objectSelector:
+      matchExpressions:
+        - key: nabiz.io/injected
+          operator: DoesNotExist

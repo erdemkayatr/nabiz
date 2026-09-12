@@ -1,0 +1,14 @@
+<clickhouse>
+    <!-- Tek node geliştirme profili. Üretimde bellek ve merge ayarlarını
+         donanıma göre yeniden belirleyin. -->
+    <logger>
+        <level>warning</level>
+    </logger>
+    <max_server_memory_usage_to_ram_ratio>0.7</max_server_memory_usage_to_ram_ratio>
+    <merge_tree>
+        <!-- Yoğun küçük insert akışında parça sayısı hızla büyür; birleşme
+             eşiklerini gevşetip yazma yolunu rahatlatıyoruz. -->
+        <parts_to_delay_insert>2000</parts_to_delay_insert>
+        <parts_to_throw_insert>3000</parts_to_throw_insert>
+    </merge_tree>
+</clickhouse>

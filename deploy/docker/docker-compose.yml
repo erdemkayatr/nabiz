@@ -1,0 +1,164 @@
+name: nabiz
+
+services:
+  # --- depolama ---
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3-alpine
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/nabiz.xml:/etc/clickhouse-server/config.d/nabiz.xml:ro
+    ports:
+      - "8123:8123"   # HTTP arayüzü (ad-hoc SQL için)
+      - "9000:9000"   # native protokol
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # nabiz'in denetim düzlemi: kullanıcılar, rol grupları, projeler, oturumlar.
+  # Örnek uygulamanın Postgres'inden kasıtlı olarak ayrı — biri ürünün
+  # verisi, diğeri demo uygulamanın verisi.
+  nabiz-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nabiz
+      POSTGRES_PASSWORD: nabiz
+      POSTGRES_DB: nabiz
+    volumes:
+      - nabiz-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nabiz -d nabiz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # --- nabiz ---
+  collector:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        CMD: collector
+    environment:
+      NABIZ_CLICKHOUSE_ADDRS: clickhouse:9000
+      NABIZ_CLICKHOUSE_DATABASE: nabiz
+      NABIZ_RETENTION_DAYS: "7"
+      NABIZ_WORKERS: "4"
+      NABIZ_BATCH_SIZE: "5000"
+      NABIZ_FLUSH_INTERVAL: "2s"
+      NABIZ_TOPOLOGY_FLUSH_INTERVAL: "10s"
+      NABIZ_LOG_LEVEL: info
+    ports:
+      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318"   # OTLP/HTTP
+      - "8888:8888"   # /stats, /healthz
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        CMD: api
+    environment:
+      NABIZ_CLICKHOUSE_ADDRS: clickhouse:9000
+      NABIZ_CLICKHOUSE_DATABASE: nabiz
+      NABIZ_API_ADDR: ":8080"
+      NABIZ_POSTGRES_DSN: "postgres://nabiz:nabiz@nabiz-postgres:5432/nabiz?sslmode=disable"
+      # Yerel geliştirme için sabit giriş. Üretimde bu iki değişkeni
+      # vermeyin: nabiz rastgele bir parola üretip loga bir kez yazar.
+      NABIZ_ADMIN_EMAIL: admin@nabiz.local
+      NABIZ_ADMIN_PASSWORD: nabiz1234
+    ports:
+      - "8080:8080"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      nabiz-postgres:
+        condition: service_healthy
+      collector:
+        condition: service_started
+
+  # --- örnek .NET uygulaması ---
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nabiz
+      POSTGRES_PASSWORD: nabiz
+      POSTGRES_DB: orders
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nabiz -d orders"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ../../samples/dotnet
+      dockerfile: Dockerfile
+      args:
+        PROJECT: Nabiz.Sample.Backend
+    environment:
+      OTEL_SERVICE_NAME: sample-backend
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local,service.namespace=shop
+      ConnectionStrings__Orders: "Host=postgres;Username=nabiz;Password=nabiz;Database=orders"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      collector:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ../../samples/dotnet
+      dockerfile: Dockerfile
+      args:
+        PROJECT: Nabiz.Sample.Frontend
+    environment:
+      OTEL_SERVICE_NAME: sample-frontend
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local,service.namespace=shop
+      Backend__Url: http://backend:8080
+    ports:
+      - "8082:8080"
+    depends_on:
+      backend:
+        condition: service_started
+
+  # --- yük üreteci: topolojide akan trafik olsun diye ---
+  loadgen:
+    image: alpine:3.21
+    depends_on:
+      frontend:
+        condition: service_started
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl >/dev/null 2>&1
+        echo "yük üretimi başlıyor"
+        while true; do
+          curl -s -o /dev/null http://frontend:8080/shop
+          curl -s -o /dev/null "http://frontend:8080/shop/orders/$$(( (RANDOM % 600) + 1 ))"
+          curl -s -o /dev/null http://frontend:8080/shop/checkout
+          if [ $$(( RANDOM % 10 )) -eq 0 ]; then
+            curl -s -o /dev/null http://frontend:8080/shop/report
+          fi
+          sleep 0.5
+        done
+
+volumes:
+  clickhouse-data:
+  nabiz-postgres-data:

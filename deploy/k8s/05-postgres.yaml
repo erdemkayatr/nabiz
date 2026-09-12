@@ -1,0 +1,77 @@
+# nabiz'in denetim düzlemi deposu: kullanıcılar, rol grupları, projeler,
+# uygulama atamaları ve oturumlar.
+#
+# Telemetri ClickHouse'ta, kimlik burada. Ayrım kasıtlı: ClickHouse
+# append-only ve nihai tutarlı; kimlik verisi benzersizlik kısıtı, transaction
+# ve yerinde güncelleme ister.
+#
+# Üretimde yönetilen bir PostgreSQL (RDS, Cloud SQL, CNPG) kullanın ve bu
+# dosyayı yalnızca Secret ile değiştirin.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nabiz-postgres
+  namespace: nabiz
+type: Opaque
+stringData:
+  POSTGRES_USER: nabiz
+  POSTGRES_DB: nabiz
+  # ÜRETİMDE DEĞİŞTİRİN. Örn: kubectl create secret generic nabiz-postgres \
+  #   --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" ...
+  POSTGRES_PASSWORD: degistirin-lutfen
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nabiz-postgres
+  namespace: nabiz
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: nabiz-postgres
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nabiz-postgres
+  namespace: nabiz
+spec:
+  serviceName: nabiz-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nabiz-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nabiz-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          envFrom:
+            - secretRef: { name: nabiz-postgres }
+          env:
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi

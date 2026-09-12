@@ -1,0 +1,27 @@
+# Örnek: enstrümante edilmek için tek gereken annotation.
+# Uygulama imajı, Dockerfile'ı ve kodu değişmez.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-backend
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: sample-backend }
+  template:
+    metadata:
+      labels: { app: sample-backend }
+      annotations:
+        nabiz.io/inject-dotnet: "true"
+        nabiz.io/service-name: "sample-backend"
+        # Alpine tabanlı imajlarda: nabiz.io/libc: "musl"
+        # Yüksek hacimli servislerde: nabiz.io/sample-ratio: "0.1"
+    spec:
+      containers:
+        - name: app
+          image: nabiz-backend:latest
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: ConnectionStrings__Orders
+              value: "Host=postgres;Username=nabiz;Password=nabiz;Database=orders"

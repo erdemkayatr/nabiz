@@ -1,0 +1,11 @@
+bin/
+*.exe
+.DS_Store
+
+# .NET
+samples/dotnet/**/bin/
+samples/dotnet/**/obj/
+
+# yerel araç çıktıları
+*.out
+*.test
