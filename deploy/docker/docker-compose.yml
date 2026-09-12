@@ -95,6 +95,10 @@ services:
       POSTGRES_USER: nabiz
       POSTGRES_PASSWORD: nabiz
       POSTGRES_DB: orders
+    ports:
+      # Yalnızca geliştirme için: compose dışında çalışan örnek uygulamanın
+      # aynı veritabanına bağlanabilmesi gerekiyor.
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nabiz -d orders"]
       interval: 5s

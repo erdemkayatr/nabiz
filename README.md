@@ -102,16 +102,23 @@ Otomatik enstrümantasyon istekleri, HTTP çağrılarını ve veritabanı sorgul
 görür — aradaki kendi kodunuzu görmez. Bir isteğin 200 ms sürdüğünü bilmek, o
 200 ms'in nerede geçtiğini söylemez.
 
-`NabizTracer` ile ölçmek istediğiniz yeri işaretlersiniz; dosya ve satır
-bilgisi derleyiciden bedavaya gelir:
+İki yol var. **Otomatik:** DI'a kayıtlı servisleri tek satırla ölçüme alın —
+o servislerin bütün metotları kodlarına dokunulmadan kendi span'ini alır.
 
 ```csharp
-using var span = NabizTracer.Start();               // metot adıyla
+builder.Services.AddScoped<ISepetServisi, SepetServisi>();
+builder.Services.AddNabizCodeLevel();   // kayıtlardan SONRA
+```
+
+**Seçmeli:** ölçmek istediğiniz bloğu işaretleyin; dosya ve satır bilgisi
+derleyiciden bedavaya gelir.
+
+```csharp
 var fiyat = NabizTracer.Measure("fiyat hesapla", () => Hesapla(sepet));
 await NabizTracer.MeasureAsync("stok rezerve et", () => StokAyir(sepet));
 ```
 
-Trace detayında üç şey görünür:
+Trace detayında dört şey görünür:
 
 **Kendi süresi (self time).** Her span için toplam sürenin yanında,
 çocuklarında geçmeyen süre ayrı gösterilir. Şelale çubuğu iki katmanlıdır:
@@ -126,6 +133,18 @@ GET /hesapla        toplam  68.12 ms   kendi   0.33 ms
   stok rezerve et   toplam   9.02 ms   kendi   9.02 ms   Program.cs:34
 ```
 
+**Süre nerede geçti.** Kendi kodu / veritabanı / dış servis çağrısı / kuyruk
+kırılımı. Kendi süreler toplandığı için dilimlerin toplamı trace süresine
+eşittir — bir isteğin yavaş olduğunu görmek yetmez, kendi kodunda mı yoksa
+beklediği bir serviste mi yavaş olduğu farklı ekiplere iş düşürür.
+
+```
+veritabanı            52.92 ms  %57.9
+kendi kodu            37.92 ms  %41.5
+dış servis çağrısı     0.62 ms  % 0.7
+Servis bazında: sepet-servisi 90.97 ms (%99.5) · sample-backend 0.49 ms (%0.5)
+```
+
 **Sıcak noktalar.** Kendi süresine göre sıralanmış özet. Aynı adı taşıyan
 span'ler toplanır, böylece N+1 sorgu gibi desenler görünür olur: tek tek 2 ms
 süren 80 sorgu listede 160 ms olarak en üste çıkar.
@@ -134,9 +153,14 @@ süren 80 sorgu listede 160 ms olarak en üste çıkar.
 (dosya:satır) yığın izinin uygulamaya ait ilk karesinden ayıklanır. Ayrı bir
 log aramaya gerek kalmaz.
 
-Gerçek metot seviyesi profilleme CLR Profiler API'si ile IL'i yeniden yazmayı
-gerektirir ve her metoda ölçüm maliyeti bindirir. Buradaki yaklaşım bilinçli
-olarak seçmelidir.
+Span'ler ayrıca ayrılan belleği, thread kimliğini ve async thread değişimini
+taşır. Parametrelerin yalnızca tipleri kaydedilir; değerler kişisel veri,
+parola ya da jeton taşıyabileceği için agent onları hiç göndermez.
+
+Otomatik ölçüm yalnızca **arayüz üzerinden** kayıtlı servisleri kapsar; IL'e
+dokunulmaz, çünkü bozuk IL üretmek izlediği uygulamayı çökerten bir araç
+demektir. Tek satırı da kaldırmak için `IHostingStartup` denendi ve çalışmıyor:
+hosting startup, uygulamanın kendi kayıtlarından önce koşuyor.
 
 ## Erişim modeli
 
@@ -329,9 +353,11 @@ make fmt     # gofmt + go vet
   türetiliyor, ayrıca metrik toplanmıyor.
 - **Tail-based sampling.** Örnekleme agent tarafında, trace başına baştan
   karar veriliyor. "Önce topla, yavaş/hatalı olanı sakla" henüz yok.
-- **Otomatik metot seviyesi profilleme.** `NabizTracer` seçmelidir; her metodu
-  kendiliğinden ölçen bir profiler yok. Bunun için CLR Profiler API'si ile IL
-  yeniden yazmak gerekir.
+- **Sürekli CPU profilleme.** Dynatrace'in yaptığı gibi çalışan süreçten
+  periyodik yığın örneği alıp metot bazında CPU dağılımı çıkarmak yok.
+- **DI dışındaki metotlar.** Otomatik ölçüm arayüz üzerinden kayıtlı
+  servisleri kapsar; statik yardımcılar ve `new` ile üretilen nesneler için
+  `NabizTracer` gerekir.
 - **CPU süresi ve bekleme süresi ayrımı.** Span'ler duvar saati süresini
   ölçer; "CPU'da mı geçti, kilitte mi bekledi" ayrımı yok.
 - **SSO / LDAP.** Kimlik yalnızca e-posta + parola. OIDC bağlamak için

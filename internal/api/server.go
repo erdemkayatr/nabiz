@@ -583,6 +583,14 @@ type SpanView struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
+// TimeSlice, trace süresinin bir kırılım dilimi.
+type TimeSlice struct {
+	Key   string  `json:"key"`
+	MS    float64 `json:"ms"`
+	Share float64 `json:"share"`
+	Count int     `json:"count"`
+}
+
 // Hotspot, trace içindeki toplam self time'a göre en pahalı işlemler.
 type Hotspot struct {
 	Name    string        `json:"name"`
@@ -705,10 +713,15 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		out[i].SelfMS = nsToMS(float64(self))
 	}
 
+	byCategory, byService := buildBreakdown(out)
 	writeJSON(w, map[string]any{
 		"traceId":  traceID,
 		"spans":    out,
 		"hotspots": buildHotspots(out),
+		// Sürenin nerede geçtiği: kendi kodda mı, veritabanında mı, başka bir
+		// servise giden çağrıda mı.
+		"breakdown": byCategory,
+		"byService": byService,
 	})
 }
 
@@ -758,6 +771,69 @@ func buildEvents(times []time.Time, names []string, attrs []map[string]string) [
 		events = append(events, ev)
 	}
 	return events
+}
+
+// categoryOf, span'in süresinin hangi kırılıma yazılacağını söyler.
+//
+// Kendi süresi (self time) üzerinden çalışır, bu yüzden diliımlerin toplamı
+// trace'in toplam süresine eşittir. Toplam süre üzerinden hesaplasaydık
+// iç içe span'ler birden çok kez sayılırdı.
+func categoryOf(s *SpanView) string {
+	a := s.Attributes
+	switch {
+	case a["db.system"] != "" || a["db.system.name"] != "":
+		return "database"
+	case a["messaging.system"] != "":
+		return "messaging"
+	case s.Kind == "client" || s.Kind == "producer":
+		// Dışa giden çağrı: hedef servis enstrümante olsa bile burada geçen
+		// süre ağ ve bekleme süresidir.
+		return "outbound"
+	case s.Kind == "internal":
+		return "code"
+	default:
+		return "code"
+	}
+}
+
+// buildBreakdown, süreyi kategoriye ve servise göre böler.
+func buildBreakdown(spans []SpanView) ([]TimeSlice, []TimeSlice) {
+	cat := map[string]*TimeSlice{}
+	svc := map[string]*TimeSlice{}
+	var total float64
+
+	for i := range spans {
+		s := &spans[i]
+		total += s.SelfMS
+
+		key := categoryOf(s)
+		if c, ok := cat[key]; ok {
+			c.MS += s.SelfMS
+			c.Count++
+		} else {
+			cat[key] = &TimeSlice{Key: key, MS: s.SelfMS, Count: 1}
+		}
+
+		if v, ok := svc[s.Service]; ok {
+			v.MS += s.SelfMS
+			v.Count++
+		} else {
+			svc[s.Service] = &TimeSlice{Key: s.Service, MS: s.SelfMS, Count: 1}
+		}
+	}
+
+	flatten := func(m map[string]*TimeSlice) []TimeSlice {
+		out := make([]TimeSlice, 0, len(m))
+		for _, v := range m {
+			if total > 0 {
+				v.Share = v.MS / total
+			}
+			out = append(out, *v)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].MS > out[j].MS })
+		return out
+	}
+	return flatten(cat), flatten(svc)
 }
 
 // buildHotspots, self time'a göre en pahalı işlemleri özetler.

@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Nabiz.Agent</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.3.2</Version>
     <Authors>nabiz</Authors>
     <Description>
       nabiz APM agent'ı. Paketi eklemek yeterlidir: derlemede nabiz.json
@@ -27,6 +27,7 @@
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
   </ItemGroup>
 
   <!--

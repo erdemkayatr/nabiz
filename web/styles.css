@@ -359,3 +359,14 @@ pre.stack {
 .hotspot-track { flex: 1; height: 9px; background: var(--panel); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
 .hotspot-bar { height: 100%; background: var(--accent); border-radius: 5px; }
 .hotspot-val { flex: 0 0 108px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; font-variant-numeric: tabular-nums; }
+
+/* ==================== SÜRE KIRILIMI ==================== */
+.breakdown { border-bottom: 1px solid var(--border); padding: 12px 15px 14px 15px; }
+.bd-bar { display: flex; height: 13px; border-radius: 7px; overflow: hidden; background: var(--panel-2); }
+.bd-seg { height: 100%; }
+.bd-seg + .bd-seg { border-left: 1px solid var(--panel); }
+.bd-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 9px; font-size: 12.5px; }
+.bd-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.bd-legend .swatch { width: 9px; height: 9px; border-radius: 2px; }
+.bd-services { margin-top: 9px; font-size: 12.5px; }
+.attrs.runtime div { color: var(--text-dim); font-size: 11.5px; }

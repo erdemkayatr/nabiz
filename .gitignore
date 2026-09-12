@@ -16,4 +16,4 @@ agent/dotnet/**/obj/
 agent/dotnet/local-feed/
 # Örnek uygulamanın config'i derlemede üretilir; commit'lenirse
 # "derleyince oluşur" davranışı doğrulanamaz hale gelir.
-agent/dotnet/Nabiz.Agent.Sample/nabiz.json
+agent/dotnet/Shop.Sample/nabiz.json

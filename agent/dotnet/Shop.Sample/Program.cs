@@ -1,4 +1,6 @@
 using Nabiz.Agent;
+using Npgsql;
+using Shop.Servisler;
 
 // Bu dosyada agent'ı başlatan tek satır yok: Nabiz.Agent paketi derleme
 // sırasında bir [ModuleInitializer] enjekte ediyor ve agent uygulama
@@ -6,9 +8,28 @@ using Nabiz.Agent;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient();
+
+// Gerçek bir veritabanı ve gerçek bir dış servis.
+builder.Services.AddSingleton(new NpgsqlDataSourceBuilder(
+    "Host=localhost;Username=nabiz;Password=nabiz;Database=orders").Build());
+builder.Services.AddHttpClient("katalog", c => c.BaseAddress = new Uri("http://localhost:8081"));
+
+builder.Services.AddScoped<ISepetServisi, SepetServisi>();
+builder.Services.AddScoped<IFiyatServisi, FiyatServisi>();
+builder.Services.AddScoped<IStokServisi, StokServisi>();
+builder.Services.AddScoped<IKatalogServisi, KatalogServisi>();
+
+// Tek satır. Yukarıdaki üç servisin BÜTÜN metotları, kodlarına
+// dokunulmadan ölçülmeye başlar.
+builder.Services.AddNabizCodeLevel();
+
 var app = builder.Build();
 
 app.MapGet("/", () => "nabiz agent örneği");
+
+// Bu uçta NabizTracer kullanılmıyor: tüm kırılım DI sarmalamasından geliyor.
+app.MapGet("/siparis", async (ISepetServisi sepet, int? adet) =>
+    Results.Ok(await sepet.SiparisOzetiAsync(adet ?? 3)));
 
 // Otomatik enstrümantasyon bu isteği görür ama içindeki 3 aşamanın
 // hangisinin yavaş olduğunu söyleyemez. NabizTracer ile her aşama kendi

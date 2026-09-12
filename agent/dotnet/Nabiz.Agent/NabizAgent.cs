@@ -125,7 +125,9 @@ public static class NabizAgent
             .AddAspNetCoreInstrumentation(o => o.RecordException = true)
             .AddHttpClientInstrumentation(o => o.RecordException = true)
             // Uygulamanın NabizTracer ile açtığı metot seviyesi span'ler.
-            .AddSource(NabizTracer.SourceName);
+            .AddSource(NabizTracer.SourceName)
+            // AddNabizCodeLevel() ile sarmalanan servislerin metot span'leri.
+            .AddSource(NabizCodeLevel.SourceName);
 
         if (opts.CaptureCodeLocation) builder.AddProcessor(new CodeLocationProcessor());
 

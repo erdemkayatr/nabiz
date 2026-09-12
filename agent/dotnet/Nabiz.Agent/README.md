@@ -37,6 +37,7 @@ yazılmaz; sonraki derlemeler değişikliğinizi korur.
 | `additionalSources` | `["Npgsql"]` | Ek ActivitySource adları |
 | `headers` | `{}` | OTLP başlıkları (ingress kimlik doğrulaması) |
 | `captureDbStatement` | `true` | `false` ise SQL metni span'den silinir |
+| `captureCodeLocation` | `true` | Hatalı span'lere dosya:satır eklenir |
 | `debug` | `false` | Agent'ın kendi tanılama çıktısı |
 
 Her alan ortam değişkeniyle ezilebilir: `NABIZ_ENDPOINT`,
@@ -65,6 +66,47 @@ pod'larda ek ayar gerekmez.
 ```csharp
 Nabiz.Agent.NabizAgent.Start();
 ```
+
+## Otomatik metot seviyesi ölçüm
+
+Otomatik enstrümantasyon istekleri, HTTP çağrılarını ve veritabanı sorgularını
+görür — aradaki kendi kodunuzu görmez. Servislerinizi tek satırla ölçüme
+alabilirsiniz:
+
+```csharp
+builder.Services.AddScoped<ISepetServisi, SepetServisi>();
+builder.Services.AddScoped<IFiyatServisi, FiyatServisi>();
+
+builder.Services.AddNabizCodeLevel();   // kayıtlardan SONRA
+```
+
+Bu noktadan sonra bu servislerin **bütün metotları**, kodlarına dokunulmadan
+kendi span'ini alır: metot adı, süresi, kendi süresi, ayrılan bellek, thread
+kimliği ve async thread değişimi.
+
+Parametrelerin yalnızca **tipleri** kaydedilir. Değerler asla gönderilmez:
+parametre kişisel veri, parola ya da jeton taşıyabilir.
+
+### Neden tek satır gerekiyor
+
+Dynatrace gibi araçlar CLR Profiler API'si ile çalışma anında IL'i yeniden
+yazar ve hiçbir işaret gerekmeden her metodu görür. Bu paket IL'e dokunmaz:
+bozuk IL üretmek, izlediği uygulamayı çökerten bir gözlemlenebilirlik aracı
+demektir.
+
+`IHostingStartup` ile bu satırı da kaldırmak denendi ve çalışmıyor: hosting
+startup, uygulamanın kendi servis kayıtlarından **önce** çalışıyor ve
+sarmalanacak servisleri henüz göremiyor.
+
+### Sınırlar
+
+- Yalnızca **arayüz üzerinden** kayıtlı servisler sarmalanır. Sınıf olarak
+  kayıtlı servisler için metotların `virtual` olması gerekirdi; o da sessizce
+  eksik ölçüm üretir.
+- `ValueTask` döndüren metotlarda yalnızca senkron kısım ölçülür. `AsTask()`
+  çağırmak çağıranın elinden sonucu alırdı; span bu durumu açıkça işaretler.
+- Varsayılan olarak yalnızca giriş assembly'sinin kök namespace'i taranır.
+  Farklı bir kapsam için: `AddNabizCodeLevel(o => o.IncludeNamespaces.Add("Shop."))`
 
 ## Neler toplanır
 

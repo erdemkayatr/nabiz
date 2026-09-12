@@ -53,6 +53,14 @@ const STRINGS = {
     "code.location": "kod konumu", "code.stack": "yığın izi",
     "code.showStack": "yığın izini göster", "code.hideStack": "gizle",
     "exception.title": "İstisna",
+    "breakdown.title": "Süre nerede geçti",
+    "breakdown.hint": "Kendi süreleri toplanır; dilimlerin toplamı trace süresine eşittir.",
+    "breakdown.code": "kendi kodu", "breakdown.database": "veritabanı",
+    "breakdown.outbound": "dış servis çağrısı", "breakdown.messaging": "kuyruk",
+    "breakdown.other": "diğer", "breakdown.byService": "Servis bazında",
+    "span.allocated": "ayrılan bellek", "span.thread": "thread",
+    "span.threadSwitched": "async thread değişimi",
+    "span.params": "parametreler", "span.partial": "yalnızca senkron kısım ölçüldü",
 
     // --- giriş ---
     "login.title": "nabiz'e giriş",
@@ -156,6 +164,14 @@ const STRINGS = {
     "code.location": "code location", "code.stack": "stack trace",
     "code.showStack": "show stack trace", "code.hideStack": "hide",
     "exception.title": "Exception",
+    "breakdown.title": "Where the time went",
+    "breakdown.hint": "Self times summed; the slices add up to the trace duration.",
+    "breakdown.code": "own code", "breakdown.database": "database",
+    "breakdown.outbound": "outbound call", "breakdown.messaging": "queue",
+    "breakdown.other": "other", "breakdown.byService": "By service",
+    "span.allocated": "allocated", "span.thread": "thread",
+    "span.threadSwitched": "async thread switch",
+    "span.params": "parameters", "span.partial": "only the synchronous part was measured",
 
     "login.title": "Sign in to nabiz",
     "login.subtitle": "Sign in with your account to continue",
@@ -309,6 +325,8 @@ const fmtMs = (ms) => ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : ms >= 10 ? ms
 const fmtRate = (r) => r >= 1 ? r.toFixed(1) + t("unit.perSec") : (r * 60).toFixed(1) + t("unit.perMin");
 const fmtPct = (p) => (p * 100).toFixed(p > 0 && p < 0.001 ? 3 : 1) + "%";
 const fmtCount = (n) => n >= 1e6 ? (n / 1e6).toLocaleString(LOCALE, { maximumFractionDigits: 1 }) + t("unit.million") : n.toLocaleString(LOCALE);
+const fmtBytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB"
+  : n >= 1024 ? (n / 1024).toFixed(0) + " KB" : n + " B";
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleString(LOCALE) : t("admin.never");
 const errClass = (r) => r > 0.05 ? "err" : r > 0.01 ? "warn" : "ok";
 const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
@@ -676,7 +694,7 @@ async function showTrace(traceId) {
   showState(body, "empty", t("status.loading"));
   try {
     const data = await api("/api/v1/traces/" + traceId);
-    renderWaterfall(body, data.spans || [], data.hotspots || []);
+    renderWaterfall(body, data.spans || [], data.hotspots || [], data.breakdown || [], data.byService || []);
     markOk();
   } catch (e) {
     if (e.status === 401) return;
@@ -684,7 +702,7 @@ async function showTrace(traceId) {
   }
 }
 
-function renderWaterfall(body, spans, hotspots) {
+function renderWaterfall(body, spans, hotspots, breakdown, byService) {
   if (!spans.length) { showState(body, "empty", t("empty.spans")); return; }
   const t0 = Math.min.apply(null, spans.map((s) => new Date(s.start).getTime()));
   const total = Math.max.apply(null, spans.map((s) => new Date(s.start).getTime() - t0 + s.durationMs)) || 1;
@@ -736,9 +754,27 @@ function renderWaterfall(body, spans, hotspots) {
         el("b", { text: fmtMs(span.durationMs) }),
         el("span", { class: "wf-self", text: fmtMs(selfMs) }))));
 
+
     const a = span.attributes || {};
     const detail = a["db.query.text"] || a["db.statement"] || a["url.full"] || a["http.url"];
     const indent = "padding-left:" + (15 + depth * 15) + "px";
+
+    // Çalışma anı detayları: ayrılan bellek, thread, async geçişi, parametre
+    // tipleri. Parametre DEĞERLERİ asla gelmez — agent onları hiç göndermiyor.
+    const runtime = [];
+    const alloc = Number(a["nabiz.allocated.bytes"] || 0);
+    if (alloc > 0) runtime.push(t("span.allocated") + " " + fmtBytes(alloc));
+    if (a["thread.id"]) {
+      runtime.push(a["nabiz.async.thread_switched"]
+        ? t("span.threadSwitched") + " " + a["thread.id"] + " \u2192 " + a["thread.end.id"]
+        : t("span.thread") + " " + a["thread.id"]);
+    }
+    if (a["code.parameter.types"]) runtime.push(t("span.params") + ": " + a["code.parameter.types"]);
+    if (a["nabiz.timing.partial"]) runtime.push(t("span.partial"));
+    if (runtime.length) {
+      container.append(el("div", { class: "attrs runtime", style: indent },
+        el("div", { text: runtime.join("   \u00b7   ") })));
+    }
 
     if (detail) {
       container.append(el("div", { class: "attrs", style: indent },
@@ -757,8 +793,56 @@ function renderWaterfall(body, spans, hotspots) {
   for (const r of roots.sort((a, b) => new Date(a.start) - new Date(b.start))) walk(r, 0);
 
   body.replaceChildren();
+  if (breakdown && breakdown.length) body.append(renderBreakdown(breakdown, byService));
   if (hotspots && hotspots.length) body.append(renderHotspots(hotspots));
   body.append(container);
+}
+
+const BREAKDOWN_COLORS = {
+  code: "var(--accent)", database: "var(--db)", outbound: "var(--warn)",
+  messaging: "var(--mq)", other: "var(--ext)",
+};
+
+// renderBreakdown, sürenin kategorilere ve servislere dağılımını çizer.
+//
+// Bir isteğin yavaş olduğunu görmek yetmez; kendi kodunda mı, veritabanında mı,
+// yoksa beklediği başka bir serviste mi yavaş olduğu farklı ekiplere iş düşürür.
+function renderBreakdown(slices, byService) {
+  const box = el("div", { class: "breakdown" },
+    el("div", { class: "hotspots-head" },
+      el("b", { text: t("breakdown.title") }),
+      el("span", { class: "hint", text: t("breakdown.hint") })));
+
+  const bar = el("div", { class: "bd-bar" });
+  for (const s of slices) {
+    if (s.share <= 0) continue;
+    bar.append(el("div", {
+      class: "bd-seg",
+      style: "width:" + (s.share * 100) + "%;background:" + (BREAKDOWN_COLORS[s.key] || "var(--ext)"),
+      title: t("breakdown." + s.key) + " · " + fmtMs(s.ms) + " · " + fmtPct(s.share),
+    }));
+  }
+  box.append(bar);
+
+  const legend = el("div", { class: "bd-legend" });
+  for (const s of slices) {
+    if (s.share <= 0) continue;
+    legend.append(el("span", {},
+      el("i", { class: "swatch", style: "background:" + (BREAKDOWN_COLORS[s.key] || "var(--ext)") }),
+      el("b", { text: t("breakdown." + s.key) }),
+      el("span", { class: "wf-self", text: fmtMs(s.ms) + " · " + fmtPct(s.share) })));
+  }
+  box.append(legend);
+
+  if (byService && byService.length > 1) {
+    const svc = el("div", { class: "bd-services" },
+      el("span", { class: "hint", text: t("breakdown.byService") + ": " }));
+    for (const s of byService) {
+      svc.append(el("i", { class: "tag", text: s.key + "  " + fmtMs(s.ms) + " (" + fmtPct(s.share) + ")" }));
+    }
+    box.append(svc);
+  }
+  return box;
 }
 
 // renderCodeLocation, span'in geldiği dosya ve satırı gösterir.
