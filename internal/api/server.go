@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -543,22 +544,54 @@ func (s *Server) handleTraceSearch(w http.ResponseWriter, r *http.Request) {
 
 // --- trace detayı ---
 
+// SpanEvent, span üzerindeki bir olay (çoğunlukla istisna).
+type SpanEvent struct {
+	Timestamp  time.Time         `json:"timestamp"`
+	Name       string            `json:"name"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// CodeLocation, span'in geldiği kaynak konumu.
+type CodeLocation struct {
+	Function   string `json:"function,omitempty"`
+	File       string `json:"file,omitempty"`
+	Line       int    `json:"line,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	StackTrace string `json:"stackTrace,omitempty"`
+}
+
 // SpanView, trace detayındaki tek bir span.
 type SpanView struct {
-	SpanID       string            `json:"spanId"`
-	ParentSpanID string            `json:"parentSpanId,omitempty"`
-	Name         string            `json:"name"`
-	Kind         string            `json:"kind"`
-	Service      string            `json:"service"`
-	Namespace    string            `json:"namespace,omitempty"`
-	Pod          string            `json:"pod,omitempty"`
-	Workload     string            `json:"workload,omitempty"`
-	Node         string            `json:"node,omitempty"`
-	Start        time.Time         `json:"start"`
-	DurationMS   float64           `json:"durationMs"`
-	Status       string            `json:"status"`
-	StatusMsg    string            `json:"statusMessage,omitempty"`
-	Attributes   map[string]string `json:"attributes,omitempty"`
+	SpanID       string    `json:"spanId"`
+	ParentSpanID string    `json:"parentSpanId,omitempty"`
+	Name         string    `json:"name"`
+	Kind         string    `json:"kind"`
+	Service      string    `json:"service"`
+	Namespace    string    `json:"namespace,omitempty"`
+	Pod          string    `json:"pod,omitempty"`
+	Workload     string    `json:"workload,omitempty"`
+	Node         string    `json:"node,omitempty"`
+	Start        time.Time `json:"start"`
+	DurationMS   float64   `json:"durationMs"`
+	// SelfMS, bu span'de geçen ama çocuklarında geçmeyen süre. Bir isteğin
+	// nerede yavaşladığını toplam süre değil bu sayı söyler.
+	SelfMS     float64           `json:"selfMs"`
+	Status     string            `json:"status"`
+	StatusMsg  string            `json:"statusMessage,omitempty"`
+	Code       *CodeLocation     `json:"code,omitempty"`
+	Events     []SpanEvent       `json:"events,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+// Hotspot, trace içindeki toplam self time'a göre en pahalı işlemler.
+type Hotspot struct {
+	Name    string        `json:"name"`
+	Service string        `json:"service"`
+	Kind    string        `json:"kind"`
+	SelfMS  float64       `json:"selfMs"`
+	Share   float64       `json:"share"`
+	Count   int           `json:"count"`
+	Code    *CodeLocation `json:"code,omitempty"`
 }
 
 func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
@@ -594,7 +627,8 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		SELECT
 			span_id, parent_span_id, name, kind,
 			service_name, k8s_namespace, k8s_pod, k8s_workload, k8s_node,
-			timestamp, duration_ns, status_code, status_message, span_attributes
+			timestamp, duration_ns, status_code, status_message, span_attributes,
+			events_timestamp, events_name, events_attributes
 		FROM %s.spans
 		WHERE trace_id = ? AND timestamp >= ? AND timestamp <= ?
 		ORDER BY timestamp ASC
@@ -609,6 +643,9 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	out := []SpanView{}
+	durations := map[string]uint64{}
+	childSum := map[string]uint64{}
+
 	for rows.Next() {
 		var (
 			spanID, parentID, name, kind string
@@ -617,13 +654,23 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 			durNS                        uint64
 			status, statusMsg            string
 			attrs                        map[string]string
+			evTimes                      []time.Time
+			evNames                      []string
+			evAttrs                      []map[string]string
 		)
 		if err := rows.Scan(&spanID, &parentID, &name, &kind,
 			&svc, &ns, &pod, &workload, &node,
-			&ts, &durNS, &status, &statusMsg, &attrs); err != nil {
+			&ts, &durNS, &status, &statusMsg, &attrs,
+			&evTimes, &evNames, &evAttrs); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+
+		durations[spanID] = durNS
+		if parentID != "" {
+			childSum[parentID] += durNS
+		}
+
 		out = append(out, SpanView{
 			SpanID:       spanID,
 			ParentSpanID: parentID,
@@ -638,10 +685,126 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 			DurationMS:   nsToMS(float64(durNS)),
 			Status:       status,
 			StatusMsg:    statusMsg,
+			Code:         codeLocationOf(attrs),
+			Events:       buildEvents(evTimes, evNames, evAttrs),
 			Attributes:   attrs,
 		})
 	}
-	writeJSON(w, map[string]any{"traceId": traceID, "spans": out})
+
+	// Self time'ı burada hesaplıyoruz, istemcide değil: her istemcinin aynı
+	// aritmetiği tekrar yazması hem israf hem de tutarsızlık kaynağı.
+	for i := range out {
+		self := durations[out[i].SpanID]
+		if children := childSum[out[i].SpanID]; children < self {
+			self -= children
+		} else {
+			// Paralel çocuklar toplamda ebeveynden uzun sürebilir; negatif
+			// self time anlamsız olacağı için sıfıra kırpılır.
+			self = 0
+		}
+		out[i].SelfMS = nsToMS(float64(self))
+	}
+
+	writeJSON(w, map[string]any{
+		"traceId":  traceID,
+		"spans":    out,
+		"hotspots": buildHotspots(out),
+	})
+}
+
+// codeLocationOf, span attribute'larından kod konumunu çıkarır.
+// Hem güncel (code.function.name) hem eski (code.function) adlar okunur.
+func codeLocationOf(attrs map[string]string) *CodeLocation {
+	if len(attrs) == 0 {
+		return nil
+	}
+	pick := func(keys ...string) string {
+		for _, k := range keys {
+			if v := attrs[k]; v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	loc := CodeLocation{
+		Function:   pick("code.function.name", "code.function"),
+		File:       pick("code.file.path", "code.filepath"),
+		Namespace:  pick("code.namespace"),
+		StackTrace: pick("code.stacktrace"),
+	}
+	if n, err := strconv.Atoi(pick("code.line.number", "code.lineno")); err == nil {
+		loc.Line = n
+	}
+	if loc.Function == "" && loc.File == "" && loc.StackTrace == "" {
+		return nil
+	}
+	return &loc
+}
+
+// buildEvents, ClickHouse'un paralel dizilerini olay listesine çevirir.
+func buildEvents(times []time.Time, names []string, attrs []map[string]string) []SpanEvent {
+	if len(names) == 0 {
+		return nil
+	}
+	events := make([]SpanEvent, 0, len(names))
+	for i := range names {
+		ev := SpanEvent{Name: names[i]}
+		if i < len(times) {
+			ev.Timestamp = times[i]
+		}
+		if i < len(attrs) {
+			ev.Attributes = attrs[i]
+		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+// buildHotspots, self time'a göre en pahalı işlemleri özetler.
+//
+// Bir trace'te yüzlerce span olabilir; "en yavaş span hangisi" sorusuna
+// bakarak cevap vermek şelaleyi satır satır okumayı gerektirir. Aynı adı
+// taşıyan span'leri toplamak, N+1 sorgu gibi desenleri de görünür kılar:
+// tek tek 2 ms süren 80 sorgu, listede 160 ms olarak en üste çıkar.
+func buildHotspots(spans []SpanView) []Hotspot {
+	if len(spans) == 0 {
+		return []Hotspot{}
+	}
+	type agg struct {
+		Hotspot
+		total float64
+	}
+	byKey := map[string]*agg{}
+	var totalSelf float64
+
+	for i := range spans {
+		s := &spans[i]
+		totalSelf += s.SelfMS
+		key := s.Service + "\x00" + s.Name
+		a, ok := byKey[key]
+		if !ok {
+			a = &agg{Hotspot: Hotspot{Name: s.Name, Service: s.Service, Kind: s.Kind, Code: s.Code}}
+			byKey[key] = a
+		}
+		a.SelfMS += s.SelfMS
+		a.Count++
+		if a.Code == nil {
+			a.Code = s.Code
+		}
+	}
+
+	out := make([]Hotspot, 0, len(byKey))
+	for _, a := range byKey {
+		if totalSelf > 0 {
+			a.Share = a.SelfMS / totalSelf
+		}
+		out = append(out, a.Hotspot)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SelfMS > out[j].SelfMS })
+	if len(out) > 10 {
+		out = out[:10]
+	}
+	return out
 }
 
 // --- yardımcılar ---

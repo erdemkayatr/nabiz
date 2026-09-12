@@ -327,3 +327,35 @@ td.actions { white-space: nowrap; }
 .link-btn:hover { text-decoration: underline; }
 .link-btn.danger { color: var(--err); }
 .tag.admin-tag { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* ==================== KOD SEVİYESİ / ZAMANLAMA ==================== */
+.wf-bar.total { opacity: .3; }
+.wf-bar.self { opacity: 1; }
+.wf-dur { flex: 0 0 108px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+.wf-dur b { font-weight: 600; }
+.wf-self { color: var(--text-dim); font-size: 11px; }
+
+.code-row .code-loc {
+  font-family: ui-monospace, Menlo, monospace; color: var(--accent);
+}
+.attrs.exception {
+  background: color-mix(in srgb, var(--err) 9%, transparent);
+  border-left: 2px solid var(--err);
+}
+.exc-head { color: var(--err); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.exc-msg { color: var(--text); font-size: 12.5px; margin-top: 2px; }
+pre.stack {
+  margin: 7px 0 0 0; padding: 9px 11px; max-height: 260px; overflow: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+  color: var(--text-dim); white-space: pre; line-height: 1.5;
+}
+
+.hotspots { border-bottom: 1px solid var(--border); padding: 12px 15px 14px 15px; background: var(--panel-2); }
+.hotspots-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; flex-wrap: wrap; }
+.hotspot-row { display: flex; align-items: center; gap: 12px; padding: 3px 0; }
+.hotspot-name { flex: 0 0 44%; display: flex; align-items: baseline; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hotspot-name .code-loc { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); }
+.hotspot-track { flex: 1; height: 9px; background: var(--panel); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.hotspot-bar { height: 100%; background: var(--accent); border-radius: 5px; }
+.hotspot-val { flex: 0 0 108px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; font-variant-numeric: tabular-nums; }

@@ -1,0 +1,20 @@
+{
+  "$comment": "nabiz agent yapılandırması. Bu dosya derlemede bir kez oluşturulur ve bir daha üzerine yazılmaz.",
+
+  "endpoint": "http://localhost:4317",
+  "protocol": "grpc",
+
+  "serviceName": "",
+  "serviceNamespace": "",
+  "environment": "",
+
+  "sampleRatio": 1.0,
+  "enabled": true,
+
+  "additionalSources": ["Npgsql"],
+  "headers": {},
+
+  "captureDbStatement": true,
+  "captureCodeLocation": true,
+  "debug": false
+}

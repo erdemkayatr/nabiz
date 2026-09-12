@@ -44,6 +44,16 @@ const STRINGS = {
     "err.traces": "Trace'ler alınamadı", "err.trace": "Trace açılamadı",
     "unit.perSec": "/sn", "unit.perMin": "/dk", "unit.million": " Mn",
 
+    // --- kod seviyesi / zamanlama ---
+    "wf.total": "toplam", "wf.self": "kendi süresi",
+    "wf.selfHint": "Koyu kısım bu span'in kendi süresi; açık kısım çocuklarında geçti.",
+    "hotspots.title": "Sıcak noktalar",
+    "hotspots.hint": "Kendi süresine göre en pahalı işlemler. Aynı adı taşıyanlar toplanır.",
+    "hotspots.share": "pay", "hotspots.count": "adet",
+    "code.location": "kod konumu", "code.stack": "yığın izi",
+    "code.showStack": "yığın izini göster", "code.hideStack": "gizle",
+    "exception.title": "İstisna",
+
     // --- giriş ---
     "login.title": "nabiz'e giriş",
     "login.subtitle": "Devam etmek için hesabınızla giriş yapın",
@@ -137,6 +147,15 @@ const STRINGS = {
     "err.topology": "Could not load topology", "err.services": "Could not load services",
     "err.traces": "Could not load traces", "err.trace": "Could not open trace",
     "unit.perSec": "/s", "unit.perMin": "/min", "unit.million": "M",
+
+    "wf.total": "total", "wf.self": "self time",
+    "wf.selfHint": "The solid part is time spent in this span itself; the faded part was spent in its children.",
+    "hotspots.title": "Hotspots",
+    "hotspots.hint": "Most expensive operations by self time. Spans sharing a name are summed.",
+    "hotspots.share": "share", "hotspots.count": "count",
+    "code.location": "code location", "code.stack": "stack trace",
+    "code.showStack": "show stack trace", "code.hideStack": "hide",
+    "exception.title": "Exception",
 
     "login.title": "Sign in to nabiz",
     "login.subtitle": "Sign in with your account to continue",
@@ -656,8 +675,8 @@ async function showTrace(traceId) {
   const body = $("#trace-detail-body");
   showState(body, "empty", t("status.loading"));
   try {
-    const data = await api("/api/v1/traces/" + traceId + "?from=" + state.range + scopeQuery().replace("&", "&"));
-    renderWaterfall(body, data.spans || []);
+    const data = await api("/api/v1/traces/" + traceId);
+    renderWaterfall(body, data.spans || [], data.hotspots || []);
     markOk();
   } catch (e) {
     if (e.status === 401) return;
@@ -665,7 +684,7 @@ async function showTrace(traceId) {
   }
 }
 
-function renderWaterfall(body, spans) {
+function renderWaterfall(body, spans, hotspots) {
   if (!spans.length) { showState(body, "empty", t("empty.spans")); return; }
   const t0 = Math.min.apply(null, spans.map((s) => new Date(s.start).getTime()));
   const total = Math.max.apply(null, spans.map((s) => new Date(s.start).getTime() - t0 + s.durationMs)) || 1;
@@ -683,35 +702,141 @@ function renderWaterfall(body, spans) {
   const walk = (span, depth) => {
     const start = new Date(span.start).getTime() - t0;
     const isErr = span.status === "error";
+    const selfMs = span.selfMs != null ? span.selfMs : span.durationMs;
+    const color = isErr ? "var(--err)" : "var(--accent)";
+
+    // Çubuk iki katmanlı: soluk kısım toplam süre, koyu kısım kendi süresi.
+    // Dynatrace'in okunur kıldığı ayrım bu — bir span'in 200 ms sürmesi onun
+    // yavaş olduğu anlamına gelmez, çocukları yavaş olabilir.
+    const track = el("div", { class: "wf-track" },
+      el("div", {
+        class: "wf-bar total",
+        style: "left:" + ((start / total) * 100) + "%;width:" + Math.max((span.durationMs / total) * 100, 0.4) +
+               "%;background:" + color,
+      }),
+      el("div", {
+        class: "wf-bar self",
+        style: "left:" + ((start / total) * 100) + "%;width:" + Math.max((selfMs / total) * 100, 0.3) +
+               "%;background:" + color,
+      }));
+    track.title =
+      (isErr ? t("tooltip.failed") + ": " + (span.statusMessage || "") + "\n" : "") +
+      t("tooltip.start") + " +" + fmtMs(start) + "\n" +
+      t("wf.total") + " " + fmtMs(span.durationMs) + " · " + t("wf.self") + " " + fmtMs(selfMs) + "\n" +
+      t("wf.selfHint") +
+      (span.pod ? "\npod: " + span.pod : "") + (span.node ? "\nnode: " + span.node : "");
+
     container.append(el("div", { class: "wf-row" },
       el("div", { class: "wf-name", style: "padding-left:" + (depth * 15) + "px" },
         el("span", { class: "kind", text: span.kind }),
         el("span", { class: "txt" }, el("b", { text: span.name }),
           el("span", { class: "wf-svc", text: " · " + span.service }))),
-      el("div", { class: "wf-track" },
-        el("div", {
-          class: "wf-bar",
-          style: "left:" + ((start / total) * 100) + "%;width:" + Math.max((span.durationMs / total) * 100, 0.4) +
-                 "%;background:" + (isErr ? "var(--err)" : "var(--accent)"),
-          title: (isErr ? t("tooltip.failed") + ": " + (span.statusMessage || "") + "\n" : "") +
-                 t("tooltip.start") + " +" + fmtMs(start) + " · " + t("tooltip.duration") + " " + fmtMs(span.durationMs) +
-                 (span.pod ? "\npod: " + span.pod : "") + (span.node ? "\nnode: " + span.node : ""),
-        })),
-      el("div", { class: "wf-dur", text: fmtMs(span.durationMs) })));
+      track,
+      el("div", { class: "wf-dur" },
+        el("b", { text: fmtMs(span.durationMs) }),
+        el("span", { class: "wf-self", text: fmtMs(selfMs) }))));
 
     const a = span.attributes || {};
     const detail = a["db.query.text"] || a["db.statement"] || a["url.full"] || a["http.url"];
+    const indent = "padding-left:" + (15 + depth * 15) + "px";
+
     if (detail) {
-      container.append(el("div", { class: "attrs", style: "padding-left:" + (15 + depth * 15) + "px" },
+      container.append(el("div", { class: "attrs", style: indent },
         el("div", {}, el("b", { text: ((a["db.query.text"] || a["db.statement"]) ? t("label.query") : t("label.target")) + " " }),
           document.createTextNode(truncate(detail, 150)))));
     }
+    if (span.code) container.append(renderCodeLocation(span.code, indent));
+    for (const ev of span.events || []) {
+      if (ev.name === "exception") container.append(renderException(ev, indent));
+    }
+
     for (const kid of (byParent.get(span.spanId) || []).sort((x, y) => new Date(x.start) - new Date(y.start))) {
       walk(kid, depth + 1);
     }
   };
   for (const r of roots.sort((a, b) => new Date(a.start) - new Date(b.start))) walk(r, 0);
-  body.replaceChildren(container);
+
+  body.replaceChildren();
+  if (hotspots && hotspots.length) body.append(renderHotspots(hotspots));
+  body.append(container);
+}
+
+// renderCodeLocation, span'in geldiği dosya ve satırı gösterir.
+function renderCodeLocation(code, indent) {
+  const bits = [];
+  if (code.function) bits.push(code.function);
+  if (code.file) {
+    const short = code.file.split("/").pop();
+    bits.push(short + (code.line ? ":" + code.line : ""));
+  }
+  const row = el("div", { class: "attrs code-row", style: indent },
+    el("div", {}, el("b", { text: t("code.location") + " " }),
+      el("span", { class: "code-loc", text: bits.join("  ") })));
+
+  if (code.stackTrace) {
+    const pre = el("pre", { class: "stack", hidden: "" , text: code.stackTrace });
+    const toggle = el("button", {
+      class: "link-btn", text: t("code.showStack"),
+      onclick: () => {
+        pre.hidden = !pre.hidden;
+        toggle.textContent = pre.hidden ? t("code.showStack") : t("code.hideStack");
+      },
+    });
+    row.append(toggle, pre);
+  }
+  return row;
+}
+
+// renderException, istisna olayını türü, mesajı ve yığın iziyle gösterir.
+function renderException(ev, indent) {
+  const a = ev.attributes || {};
+  const box = el("div", { class: "attrs exception", style: indent },
+    el("div", { class: "exc-head" },
+      el("b", { text: t("exception.title") + ": " }),
+      el("span", { text: a["exception.type"] || "" })),
+    a["exception.message"] ? el("div", { class: "exc-msg", text: a["exception.message"] }) : null);
+
+  const stack = a["exception.stacktrace"];
+  if (stack) {
+    const pre = el("pre", { class: "stack", hidden: "", text: stack });
+    const toggle = el("button", {
+      class: "link-btn", text: t("code.showStack"),
+      onclick: () => {
+        pre.hidden = !pre.hidden;
+        toggle.textContent = pre.hidden ? t("code.showStack") : t("code.hideStack");
+      },
+    });
+    box.append(toggle, pre);
+  }
+  return box;
+}
+
+// renderHotspots, trace'in en pahalı işlemlerini özetler.
+function renderHotspots(hotspots) {
+  const max = Math.max(...hotspots.map((h) => h.selfMs), 0.0001);
+  const box = el("div", { class: "hotspots" },
+    el("div", { class: "hotspots-head" },
+      el("b", { text: t("hotspots.title") }),
+      el("span", { class: "hint", text: t("hotspots.hint") })));
+
+  for (const h of hotspots) {
+    if (h.selfMs <= 0) continue;
+    const loc = h.code && (h.code.function || h.code.file)
+      ? (h.code.file ? h.code.file.split("/").pop() + (h.code.line ? ":" + h.code.line : "") : h.code.function)
+      : "";
+    box.append(el("div", { class: "hotspot-row" },
+      el("div", { class: "hotspot-name" },
+        el("b", { text: h.name }),
+        el("span", { class: "wf-svc", text: " · " + h.service }),
+        h.count > 1 ? el("i", { class: "tag", text: h.count + "\u00d7" }) : null,
+        loc ? el("span", { class: "code-loc", text: loc }) : null),
+      el("div", { class: "hotspot-track" },
+        el("div", { class: "hotspot-bar", style: "width:" + ((h.selfMs / max) * 100) + "%" })),
+      el("div", { class: "hotspot-val" },
+        el("b", { text: fmtMs(h.selfMs) }),
+        el("span", { class: "wf-self", text: fmtPct(h.share) }))));
+  }
+  return box;
 }
 
 // ==========================================================================

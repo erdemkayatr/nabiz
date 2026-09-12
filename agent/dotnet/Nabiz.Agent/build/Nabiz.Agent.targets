@@ -1,0 +1,60 @@
+<Project>
+
+  <!--
+    1) Config dosyasını üret.
+
+    Yalnızca dosya yoksa yazılır. Her derlemede üzerine yazsaydı, kullanıcının
+    girdiği sunucu adresi bir sonraki derlemede silinirdi.
+  -->
+  <Target Name="NabizCreateConfig"
+          BeforeTargets="AssignTargetPaths;BeforeBuild"
+          Condition="'$(NabizGenerateConfig)' == 'true' AND !Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)nabiz.template.json"
+          DestinationFiles="$(MSBuildProjectDirectory)/$(NabizConfigFile)" />
+    <Message Importance="high"
+             Text="nabiz: $(NabizConfigFile) oluşturuldu. Sunucu adresini 'endpoint' alanına yazın." />
+  </Target>
+
+  <!--
+    2) Config'i çıktı dizinine kopyala.
+
+    AssignTargetPaths'ten önce ItemGroup'a eklenmesi gerekiyor; sonra
+    eklenirse derleme çıktısına dahil edilmez.
+  -->
+  <Target Name="NabizIncludeConfig"
+          BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="NabizCreateConfig"
+          Condition="Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
+    <ItemGroup>
+      <!-- Kullanıcı dosyayı zaten eklediyse ikinci kez ekleme. -->
+      <None Include="$(MSBuildProjectDirectory)/$(NabizConfigFile)"
+            Condition="'@(None)' == '' OR !$([System.String]::Copy('%(None.Identity)').EndsWith('$(NabizConfigFile)'))">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>$(NabizConfigFile)</Link>
+      </None>
+    </ItemGroup>
+  </Target>
+
+  <!--
+    3) Otomatik başlatmayı enjekte et.
+
+    [ModuleInitializer] tüketici projenin derlemesine girmek zorunda: yalnızca
+    paketin içinde dursaydı, uygulama paketin hiçbir tipine dokunmadığı için
+    assembly hiç yüklenmez ve initializer çalışmazdı.
+  -->
+  <Target Name="NabizInjectAutoStart"
+          BeforeTargets="BeforeCompile;CoreCompile"
+          Condition="'$(NabizAutoStart)' == 'true' AND '$(Language)' == 'C#'">
+    <PropertyGroup>
+      <NabizGeneratedFile>$(IntermediateOutputPath)NabizAutoStart.g.cs</NabizGeneratedFile>
+    </PropertyGroup>
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)NabizAutoStart.cs.txt"
+          DestinationFiles="$(NabizGeneratedFile)"
+          SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <Compile Include="$(NabizGeneratedFile)" />
+      <FileWrites Include="$(NabizGeneratedFile)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

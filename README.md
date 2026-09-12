@@ -64,11 +64,79 @@ bir tavan. Pratikte darboğaz ClickHouse yazma hızıdır, topoloji hesabı değ
 | `nabiz-operator` | Go | Pod'lara .NET enstrümantasyonunu enjekte eden webhook |
 | Depolama | ClickHouse | Telemetri; span'lerde ~10x sıkıştırma |
 | Denetim düzlemi | PostgreSQL | Kullanıcı, rol grubu, proje, oturum |
-| Agent | OpenTelemetry .NET auto-instrumentation | Kod değişikliği olmadan enstrümantasyon |
+| Agent (k8s) | OpenTelemetry .NET auto-instrumentation | Operator enjekte eder, kod değişmez |
+| Agent (NuGet) | `Nabiz.Agent` | Pakete referans yeterli; config derlemede oluşur |
 
 Dil seçimi Go: Kubernetes ekosisteminin (client-go, admission webhook'ları) ve
 OTLP'nin ana dili. Rust daha yüksek tavan verirdi ama darboğaz bu katmanda
 değil, depolamada.
+
+## .NET agent'ı (NuGet)
+
+Kubernetes dışında — geliştirici makinesinde, VM'de, Windows servisinde —
+operator yoktur. O durumda agent paketi kullanılır:
+
+```bash
+dotnet add package Nabiz.Agent
+dotnet build
+```
+
+Derlemeden sonra proje klasöründe `nabiz.json` oluşur; `endpoint` alanına
+nabiz collector adresini yazarsınız. Dosya bir daha üzerine yazılmaz.
+
+```json
+{ "endpoint": "http://nabiz-collector:4317", "serviceName": "sepet-servisi" }
+```
+
+Uygulama kodunda tek satır değişiklik gerekmez: paket, derleme sırasında
+projeye bir `[ModuleInitializer]` enjekte eder ve agent uygulama açılırken
+kendiliğinden devreye girer. Ayrıntılar: [agent/dotnet/Nabiz.Agent/README.md](agent/dotnet/Nabiz.Agent/README.md).
+
+Ortam değişkenleri dosyayı ezer (`NABIZ_ENDPOINT`, `NABIZ_SERVICE_NAME`, …).
+Kubernetes'te aynı imaj farklı ortamlara gittiği için imajın içindeki dosyayı
+değiştirmek mümkün değildir; dağıtımın söylediği kazanır.
+
+## Kod seviyesi zamanlama
+
+Otomatik enstrümantasyon istekleri, HTTP çağrılarını ve veritabanı sorgularını
+görür — aradaki kendi kodunuzu görmez. Bir isteğin 200 ms sürdüğünü bilmek, o
+200 ms'in nerede geçtiğini söylemez.
+
+`NabizTracer` ile ölçmek istediğiniz yeri işaretlersiniz; dosya ve satır
+bilgisi derleyiciden bedavaya gelir:
+
+```csharp
+using var span = NabizTracer.Start();               // metot adıyla
+var fiyat = NabizTracer.Measure("fiyat hesapla", () => Hesapla(sepet));
+await NabizTracer.MeasureAsync("stok rezerve et", () => StokAyir(sepet));
+```
+
+Trace detayında üç şey görünür:
+
+**Kendi süresi (self time).** Her span için toplam sürenin yanında,
+çocuklarında geçmeyen süre ayrı gösterilir. Şelale çubuğu iki katmanlıdır:
+soluk kısım toplam, koyu kısım kendi süresi. Bir span'in 200 ms sürmesi onun
+yavaş olduğu anlamına gelmez.
+
+```
+GET /hesapla        toplam  68.12 ms   kendi   0.33 ms
+  sepeti doğrula    toplam  13.02 ms   kendi  13.02 ms   Program.cs:20
+  fiyat hesapla     toplam  45.76 ms   kendi   0.02 ms   Program.cs:26
+    kampanya uygula toplam  45.74 ms   kendi  45.74 ms   Program.cs:28
+  stok rezerve et   toplam   9.02 ms   kendi   9.02 ms   Program.cs:34
+```
+
+**Sıcak noktalar.** Kendi süresine göre sıralanmış özet. Aynı adı taşıyan
+span'ler toplanır, böylece N+1 sorgu gibi desenler görünür olur: tek tek 2 ms
+süren 80 sorgu listede 160 ms olarak en üste çıkar.
+
+**İstisnalar.** Tür, mesaj ve tam yığın izi span'in üzerinde durur; kod konumu
+(dosya:satır) yığın izinin uygulamaya ait ilk karesinden ayıklanır. Ayrı bir
+log aramaya gerek kalmaz.
+
+Gerçek metot seviyesi profilleme CLR Profiler API'si ile IL'i yeniden yazmayı
+gerektirir ve her metoda ölçüm maliyeti bindirir. Buradaki yaklaşım bilinçli
+olarak seçmelidir.
 
 ## Erişim modeli
 
@@ -224,7 +292,7 @@ curl "localhost:8080/api/v1/topology?from=1h&level=namespace"
 | `GET /api/v1/operations?service=` | İşlem başına RED metrikleri |
 | `GET /api/v1/topology?level=` | Düğümler ve kenarlar |
 | `GET /api/v1/traces` | Trace arama (`service`, `minDurationMs`, `onlyErrors`) |
-| `GET /api/v1/traces/{traceID}` | Tek trace'in tüm span'leri |
+| `GET /api/v1/traces/{traceID}` | Tek trace: span'ler (kendi süresiyle), sıcak noktalar, istisnalar |
 
 Zaman aralığı: `?from=15m` (göreli) veya `?from=<RFC3339>&to=<RFC3339>`.
 
@@ -261,6 +329,11 @@ make fmt     # gofmt + go vet
   türetiliyor, ayrıca metrik toplanmıyor.
 - **Tail-based sampling.** Örnekleme agent tarafında, trace başına baştan
   karar veriliyor. "Önce topla, yavaş/hatalı olanı sakla" henüz yok.
+- **Otomatik metot seviyesi profilleme.** `NabizTracer` seçmelidir; her metodu
+  kendiliğinden ölçen bir profiler yok. Bunun için CLR Profiler API'si ile IL
+  yeniden yazmak gerekir.
+- **CPU süresi ve bekleme süresi ayrımı.** Span'ler duvar saati süresini
+  ölçer; "CPU'da mı geçti, kilitte mi bekledi" ayrımı yok.
 - **SSO / LDAP.** Kimlik yalnızca e-posta + parola. OIDC bağlamak için
   `internal/identity` altındaki `Authenticate` ve oturum oluşturma noktaları
   yeterli, ama yazılmadı.

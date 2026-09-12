@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Nabiz.Agent</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>nabiz</Authors>
+    <Description>
+      nabiz APM agent'ı. Paketi eklemek yeterlidir: derlemede nabiz.json
+      oluşur, sunucu adresini oraya yazarsınız. Uygulama kodunda değişiklik
+      gerekmez.
+    </Description>
+    <PackageTags>apm;opentelemetry;tracing;observability;nabiz</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+  </ItemGroup>
+
+  <!--
+    build/ altındaki her şey pakete gider ve tüketici projede otomatik
+    yüklenir: config şablonu, config'i üreten hedefler ve otomatik başlatmayı
+    enjekte eden kaynak dosya.
+  -->
+  <ItemGroup>
+    <None Include="build\**" Pack="true" PackagePath="build\" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
