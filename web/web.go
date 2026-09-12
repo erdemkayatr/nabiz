@@ -11,7 +11,7 @@ import (
 	"io/fs"
 )
 
-//go:embed index.html styles.css app.js topology.js admin.js
+//go:embed index.html styles.css app.js topology.js admin.js diagnostics.js
 var files embed.FS
 
 // FS, gömülü arayüz dosyalarını döndürür.

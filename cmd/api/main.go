@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -61,6 +62,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Tanılama jetonları şifreli saklanıyor; anahtar yoksa jeton kaydı
+	// reddedilir ve arayüz bunu açıkça söyler.
+	if sealer, err := identity.NewSealer(config.String("SECRET_KEY", "")); err == nil {
+		ident.SetSealer(sealer)
+	} else {
+		log.Warn("NABIZ_SECRET_KEY tanımlı değil: tanılama jetonu saklanamayacak")
+	}
+
+	dumpDir := config.String("DUMP_DIR", filepath.Join(os.TempDir(), "nabiz-dumps"))
+	if err := os.MkdirAll(dumpDir, 0o750); err != nil {
+		log.Error("dump dizini oluşturulamadı", "dir", dumpDir, "err", err)
+		os.Exit(1)
+	}
+
 	created, generated, err := ident.Bootstrap(ctx,
 		config.String("ADMIN_EMAIL", ""), config.String("ADMIN_PASSWORD", ""))
 	if err != nil {
@@ -85,7 +100,7 @@ func main() {
 	addr := config.String("API_ADDR", ":8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.New(store.Conn(), cfg.Database, ident, log).Handler(),
+		Handler:           api.New(store.Conn(), cfg.Database, ident, dumpDir, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -96,7 +111,7 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("nabiz-api çalışıyor", "addr", addr, "clickhouse", cfg.Addrs)
+	log.Info("nabiz-api çalışıyor", "addr", addr, "clickhouse", cfg.Addrs, "dump_dir", dumpDir)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("api kapandı", "err", err)
 		os.Exit(1)

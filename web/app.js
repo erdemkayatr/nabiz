@@ -9,7 +9,22 @@
 
 const STRINGS = {
   tr: {
-    "nav.topology": "Topoloji", "nav.services": "Servisler", "nav.traces": "Trace'ler", "nav.admin": "Yönetim",
+    "nav.topology": "Topoloji", "nav.services": "Servisler", "nav.traces": "Trace'ler",
+    "nav.diagnostics": "Tanılama", "nav.admin": "Yönetim",
+    "diag.warning": "Bellek dump'ı sürecin tüm belleğini içerir: bağlantı dizeleri, oturum jetonları, parolalar ve müşteri verisi. Dosyayı buradan indiren herkes bunlara erişir.",
+    "diag.instances": "Çalışan örnekler", "diag.artifacts": "Alınan dosyalar",
+    "diag.instance": "Örnek", "diag.address": "Adres", "diag.state": "Durum",
+    "diag.lastSeen": "Son görülme", "diag.kind": "Tür", "diag.file": "Dosya",
+    "diag.size": "Boyut", "diag.by": "Alan",
+    "diag.kind.cpu": "CPU profili", "diag.kind.memory": "bellek dump'ı",
+    "diag.ready": "hazır", "diag.pending": "alınıyor", "diag.failed": "başarısız",
+    "diag.unverified": "doğrulanmadı", "diag.downloadOff": "indirme kapalı",
+    "diag.captureCpu": "CPU profili al", "diag.captureMemory": "bellek dump'ı al",
+    "diag.working": "alınıyor…", "diag.download": "İndir",
+    "diag.noInstances": "Son 5 dakikada kendini tanıtan bir örnek yok. Uygulamada Nabiz.Agent.Diagnostics paketi kurulu ve apiUrl tanımlı mı?",
+    "diag.noArtifacts": "Henüz dosya alınmadı.",
+    "diag.memoryConfirm": "Bellek dump'ı alınırken uygulama saniyeler boyunca istek işlemez ve dosya süreç belleğinin tamamını içerir. Devam edilsin mi?",
+    "admin.diagToken": "Tanılama jetonu", "admin.diagTokenHint": "Uygulamalardaki nabiz.json diagnostics.token değeri. Şifreli saklanır, bir daha gösterilmez. Boş bırakılırsa mevcut jeton silinir.",
     "range.15m": "Son 15 dakika", "range.1h": "Son 1 saat", "range.6h": "Son 6 saat", "range.24h": "Son 24 saat",
     "btn.refresh": "Yenile", "btn.search": "Ara", "btn.backToList": "← listeye dön", "btn.close": "Kapat",
     "btn.save": "Kaydet", "btn.cancel": "Vazgeç", "btn.create": "Oluştur", "btn.delete": "Sil",
@@ -112,6 +127,7 @@ const STRINGS = {
     "perm.services.read": "Servis metriklerini görüntüle",
     "perm.traces.read": "Trace'leri görüntüle",
     "perm.project.manage": "Proje uygulamalarını yönet",
+    "perm.diagnostics.manage": "Dump al ve indir",
     "perm.admin.manage": "Tüm sistemi yönet",
 
     "err.forbidden": "Bu işlem için yetkiniz yok.",
@@ -121,7 +137,22 @@ const STRINGS = {
     "empty.noPermission": "Bu bölüm için yetkiniz yok.",
   },
   en: {
-    "nav.topology": "Topology", "nav.services": "Services", "nav.traces": "Traces", "nav.admin": "Administration",
+    "nav.topology": "Topology", "nav.services": "Services", "nav.traces": "Traces",
+    "nav.diagnostics": "Diagnostics", "nav.admin": "Administration",
+    "diag.warning": "A memory dump contains the entire process memory: connection strings, session tokens, passwords and customer data. Anyone who downloads it here gets all of that.",
+    "diag.instances": "Running instances", "diag.artifacts": "Collected files",
+    "diag.instance": "Instance", "diag.address": "Address", "diag.state": "State",
+    "diag.lastSeen": "Last seen", "diag.kind": "Kind", "diag.file": "File",
+    "diag.size": "Size", "diag.by": "Taken by",
+    "diag.kind.cpu": "CPU profile", "diag.kind.memory": "memory dump",
+    "diag.ready": "ready", "diag.pending": "capturing", "diag.failed": "failed",
+    "diag.unverified": "unverified", "diag.downloadOff": "download disabled",
+    "diag.captureCpu": "Capture CPU profile", "diag.captureMemory": "Capture memory dump",
+    "diag.working": "capturing…", "diag.download": "Download",
+    "diag.noInstances": "No instance has registered in the last 5 minutes. Is Nabiz.Agent.Diagnostics installed and apiUrl set?",
+    "diag.noArtifacts": "No files collected yet.",
+    "diag.memoryConfirm": "While a memory dump is taken the application stops serving requests for several seconds, and the file contains the entire process memory. Continue?",
+    "admin.diagToken": "Diagnostics token", "admin.diagTokenHint": "The diagnostics.token value from nabiz.json in your applications. Stored encrypted and never shown again. Leave empty to remove it.",
     "range.15m": "Last 15 minutes", "range.1h": "Last 1 hour", "range.6h": "Last 6 hours", "range.24h": "Last 24 hours",
     "btn.refresh": "Refresh", "btn.search": "Search", "btn.backToList": "← back to list", "btn.close": "Close",
     "btn.save": "Save", "btn.cancel": "Cancel", "btn.create": "Create", "btn.delete": "Delete",
@@ -219,6 +250,7 @@ const STRINGS = {
     "perm.services.read": "View service metrics",
     "perm.traces.read": "View traces",
     "perm.project.manage": "Manage project applications",
+    "perm.diagnostics.manage": "Capture and download dumps",
     "perm.admin.manage": "Administer the whole system",
 
     "err.forbidden": "You do not have permission for this action.",
@@ -478,6 +510,7 @@ function renderNav() {
     ["topology", "topology.read"],
     ["services", "services.read"],
     ["traces", "traces.read"],
+    ["diagnostics", "diagnostics.manage"],
     ["admin", "admin.manage"],
   ];
   for (const [view, perm] of tabs) {
@@ -491,6 +524,7 @@ function firstAllowedView() {
   if (can("topology.read")) return "topology";
   if (can("services.read")) return "services";
   if (can("traces.read")) return "traces";
+  if (can("diagnostics.manage")) return "diagnostics";
   if (can("admin.manage")) return "admin";
   return null;
 }
@@ -947,7 +981,10 @@ function route() {
   if (!session.user) return;
   const parts = location.hash.replace(/^#/, "").split("/");
   let view = parts[0], sub = parts[1];
-  const allowed = { topology: "topology.read", services: "services.read", traces: "traces.read", admin: "admin.manage" };
+  const allowed = {
+    topology: "topology.read", services: "services.read", traces: "traces.read",
+    diagnostics: "diagnostics.manage", admin: "admin.manage",
+  };
 
   if (!allowed[view] || !can(allowed[view])) {
     const fallback = firstAllowedView();
@@ -989,6 +1026,7 @@ function refresh() {
   else if (state.view === "services") loadServices();
   else if (state.view === "traces" && !state.traceId) loadTraces();
   else if (state.view === "admin") refreshAdmin();
+  else if (state.view === "diagnostics") refreshDiagnostics();
 }
 
 function closeUserMenu() { $("#user-menu").hidden = true; }

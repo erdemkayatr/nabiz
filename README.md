@@ -99,8 +99,9 @@ değiştirmek mümkün değildir; dağıtımın söylediği kazanır.
 
 ## Talep üzerine dump
 
-Uygulamaya bir istek atıp CPU profili ya da bellek dump'ı alabilirsiniz —
-ayrı bir paketle:
+Arayüzdeki **Tanılama** menüsünden çalışan örnekleri görür, tek tıkla CPU
+profili ya da bellek dump'ı alır ve indirirsiniz. Uygulama tarafında ayrı bir
+paket gerekir:
 
 ```bash
 dotnet add package Nabiz.Agent.Diagnostics
@@ -124,10 +125,30 @@ Studio ve `dotnet-trace convert` bu biçimi zaten okuyor, kendi
 5 saniyelik profil 7.1 MB, 733 kare üretti ve içinde uygulamanın kendi
 metotları göründü.
 
+### Nasıl bağlanıyor
+
+```
+uygulama ──kayıt (60sn)──> nabiz ──dump isteği──> uygulama ──dosya──> nabiz
+```
+
+Agent kendini nabiz'e tanıtır; kayıtta uygulamanın tanılama jetonunu da
+gönderir. nabiz bunu projeye tanımlı jetonla karşılaştırır. **Tutmazsa örnek
+listelenir ama dump tetiklenemez** — bu olmasaydı sahte bir kayıt, nabiz'i
+jetonu saldırganın adresine göndermeye ikna edebilirdi.
+
+Jetonu **Yönetim → Projeler → Düzenle → Tanılama jetonu** alanına girersiniz.
+`NABIZ_SECRET_KEY` ile şifrelenerek saklanır ve bir daha gösterilmez; anahtar
+yoksa jeton hiç kaydedilmez.
+
+Dump almak ayrı bir yetkidir (`diagnostics.manage`). Trace okumakla aynı şey
+değil: bellek dump'ı bağlantı dizesi, jeton ve müşteri verisi içerir.
+
 > **Bellek dump'ı sürecin tüm belleğini diske yazar** — bağlantı dizeleri,
-> oturum jetonları, parolalar, müşteri verisi dahil. Bu yüzden varsayılan
-> **kapalı** ve **en az 16 karakterlik bir jeton** olmadan açılmıyor. İndirme
-> ayrı bir anahtardır; kapalıyken dosya yalnızca diskte durur.
+> oturum jetonları, parolalar, müşteri verisi dahil. Uygulama tarafında
+> varsayılan **kapalı** ve **en az 16 karakterlik bir jeton** olmadan
+> açılmıyor. Bu mimaride nabiz tüm uygulamaların jetonlarını saklar ve
+> dosyaları üzerinden geçirir: nabiz'i ele geçiren, izlediği her uygulamanın
+> süreç belleğini alabilir.
 
 Dump alınırken süreç **askıya alınır**: 540 MB'lık bir dump 3.8 saniye sürdü
 ve o süre boyunca uygulama istek işlemedi. Üretimde trafiği kesilmiş bir
@@ -224,7 +245,7 @@ zincirde okunabilir.
 | **Sistem yöneticisi** | Denetim düzleminin tamamını yönetir, tüm veriyi görür. |
 
 Yetkiler: `topology.read`, `services.read`, `traces.read`, `project.manage`,
-`admin.manage`.
+`diagnostics.manage`, `admin.manage`.
 
 Filtreleme sunucu tarafında, sorgu düzeyinde yapılır. Arayüzde sekme gizlemek
 bir güvenlik önlemi değil; adres çubuğundan `#admin/users` yazan bir kullanıcı
@@ -258,13 +279,14 @@ Yaklaşık bir dakika sonra arayüzü açın:
 
 (Bu sabit giriş yalnızca compose dosyasındaki yerel geliştirme içindir.)
 
-Dört ekran var:
+Beş ekran var:
 
 | Ekran | Ne gösterir |
 |---|---|
 | **Topoloji** | İsteklerden çıkarılan canlı servis grafiği: dairesel düğümler, kenarlarda çağrı hızıyla akan noktalar. Düğüm sürüklenir, tuval yakınlaştırılır. Düğüme ya da kenara tıklayınca metrik paneli açılır ve ilgisiz kısımlar soluklaşır. Seviye seçici ile servis / k8s workload / k8s namespace görünümleri. |
 | **Servisler** | Servis başına hız, hata oranı ve p50/p95/p99. |
 | **Trace'ler** | Servis, süre ve hata filtreleriyle arama; satıra tıklayınca şelale görünümü — SQL sorgusu ve HTTP hedefi dahil. |
+| **Tanılama** | Çalışan örnekler ve tek tıkla CPU profili / bellek dump'ı. Alınan dosyalar listelenir ve indirilir. `diagnostics.manage` yetkisi ister. |
 | **Yönetim** | Kullanıcılar, rol grupları ve projeler. Proje düzenleme ekranı, telemetri gönderen servisleri listeler; uygulamayı elle yazmak yerine listeden seçersiniz — yazım hatası yüzünden veri göremeyen bir proje oluşmaz. |
 
 Arayüz **Türkçe ve İngilizce**. Dil, tarayıcı diline göre seçilir, üst çubuktan
@@ -378,6 +400,8 @@ Tüm ayarlar `NABIZ_` önekli ortam değişkenleridir. Uçları da her sorgu
 | `NABIZ_POSTGRES_DSN` | `postgres://nabiz:nabiz@localhost:5432/nabiz?sslmode=disable` | Denetim düzlemi |
 | `NABIZ_ADMIN_EMAIL` | `admin@nabiz.local` | İlk yöneticinin e-postası |
 | `NABIZ_ADMIN_PASSWORD` | *(rastgele üretilir)* | Verilmezse loga bir kez yazılır |
+| `NABIZ_SECRET_KEY` | — | Tanılama jetonlarını şifreler; yoksa jeton saklanmaz |
+| `NABIZ_DUMP_DIR` | *(geçici dizin)* | Çekilen dump dosyalarının yeri |
 
 ## Geliştirme
 
@@ -397,8 +421,8 @@ make fmt     # gofmt + go vet
 - **Sürekli CPU profilleme.** Dump paketiyle talep üzerine profil alınıyor ama
   bu sürekli değil; arka planda dönen ve trace'lerle ilişkilendirilen bir
   profilci yok.
-- **Dump'ların arayüzden alınması.** Şu an uygulamaya doğrudan istek
-  atıyorsunuz; nabiz arayüzünden tetikleme ve dosyaları orada toplama yok.
+- **Dump'ların uzun süreli saklanması.** Dosyalar nabiz-api'nin diskinde
+  duruyor; nesne depolamaya taşıma, otomatik yaşlandırma ve boyut kotası yok.
 - **Metot içindeki kendi kodu.** Sarmalama servis sınırındadır: bir metodun
   içinde çağırdığınız private yardımcı görünmez. Bunun için derleme anında IL
   weaving gerekiyor. Tasarımı kararlaştırıldı — kapsam `Program.cs`'den

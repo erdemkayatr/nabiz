@@ -46,6 +46,7 @@
     <button data-view="topology" data-i18n="nav.topology" aria-current="page">Topoloji</button>
     <button data-view="services" data-i18n="nav.services">Servisler</button>
     <button data-view="traces" data-i18n="nav.traces">Trace'ler</button>
+    <button data-view="diagnostics" data-i18n="nav.diagnostics" hidden>Tanılama</button>
     <button data-view="admin" data-i18n="nav.admin" hidden>Yönetim</button>
   </nav>
   <div class="spacer"></div>
@@ -144,6 +145,18 @@
     </div>
   </section>
 
+  <!-- ==================== TANILAMA ==================== -->
+  <section class="view" id="view-diagnostics" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 data-i18n="nav.diagnostics">Tanılama</h2>
+        <div class="spacer"></div>
+        <button class="btn" onclick="refreshDiagnostics()" data-i18n="btn.refresh">Yenile</button>
+      </div>
+      <div id="diag-body"></div>
+    </div>
+  </section>
+
   <!-- ==================== YÖNETİM ==================== -->
   <section class="view" id="view-admin" hidden>
     <div class="panel">
@@ -179,6 +192,7 @@
 
 <script src="topology.js"></script>
 <script src="admin.js"></script>
+<script src="diagnostics.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

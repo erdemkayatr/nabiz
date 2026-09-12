@@ -63,6 +63,15 @@ services:
       clickhouse:
         condition: service_healthy
 
+  # Volume root'a ait olarak oluşuyor; api 10001 kullanıcısıyla koştuğu için
+  # yazamıyor. k8s'te bunu fsGroup hallediyor, compose'da tek seferlik bir
+  # adım gerekiyor.
+  dump-init:
+    image: alpine:3.21
+    command: ["sh", "-c", "mkdir -p /dumps && chown -R 10001:10001 /dumps"]
+    volumes:
+      - nabiz-dumps:/dumps
+
   api:
     build:
       context: ../..
@@ -78,6 +87,12 @@ services:
       # vermeyin: nabiz rastgele bir parola üretip loga bir kez yazar.
       NABIZ_ADMIN_EMAIL: admin@nabiz.local
       NABIZ_ADMIN_PASSWORD: nabiz1234
+      # Uygulamaların tanılama jetonları bu anahtarla şifrelenir. Üretimde
+      # Secret'tan gelmeli; anahtar değişirse saklanmış jetonlar açılamaz.
+      NABIZ_SECRET_KEY: yerel-gelistirme-sifreleme-anahtari
+      NABIZ_DUMP_DIR: /var/lib/nabiz/dumps
+    volumes:
+      - nabiz-dumps:/var/lib/nabiz/dumps
     ports:
       - "8080:8080"
     depends_on:
@@ -87,6 +102,8 @@ services:
         condition: service_healthy
       collector:
         condition: service_started
+      dump-init:
+        condition: service_completed_successfully
 
   # --- örnek .NET uygulaması ---
   postgres:
@@ -165,4 +182,5 @@ services:
 
 volumes:
   clickhouse-data:
+  nabiz-dumps:
   nabiz-postgres-data:

@@ -30,8 +30,9 @@ var (
 
 // Store, denetim düzlemi veritabanı.
 type Store struct {
-	pool *pgxpool.Pool
-	log  *slog.Logger
+	pool   *pgxpool.Pool
+	log    *slog.Logger
+	sealer *Sealer
 }
 
 // Open, havuzu açar ve canlılığını doğrular.
@@ -673,6 +674,11 @@ func randomToken(n int) string {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func sha256Sum(v string) []byte {
+	sum := sha256.Sum256([]byte(v))
+	return sum[:]
 }
 
 func truncate(s string, n int) string {

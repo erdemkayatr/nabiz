@@ -24,6 +24,13 @@ spec:
       labels:
         app.kubernetes.io/name: nabiz-api
     spec:
+      # Dump dizini volume'ü bu grupla oluşsun; container root olmadan yazsın.
+      securityContext:
+        fsGroup: 10001
+      volumes:
+        - name: dumps
+          emptyDir:
+            sizeLimit: 20Gi
       containers:
         - name: api
           image: nabiz/api:dev
@@ -40,11 +47,19 @@ spec:
             # İlk açılışta nabiz rastgele bir parola üretip loga bir kez
             # yazar: "kubectl logs deploy/nabiz-api | grep parola"
             - { name: NABIZ_ADMIN_EMAIL, value: "admin@nabiz.local" }
+            # Tanılama jetonlarını şifreleyen anahtar. Bu Secret'ı siz
+            # oluşturun; anahtar değişirse saklanmış jetonlar açılamaz.
+            - name: NABIZ_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: nabiz-secret-key, key: key, optional: true }
+            - { name: NABIZ_DUMP_DIR, value: "/var/lib/nabiz/dumps" }
           ports:
             - { containerPort: 8080 }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 5
+          volumeMounts:
+            - { name: dumps, mountPath: /var/lib/nabiz/dumps }
           resources:
             requests: { cpu: 200m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 1Gi }

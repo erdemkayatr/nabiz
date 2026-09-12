@@ -59,6 +59,10 @@ public static class NabizDiagnosticsExtensions
         services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(
             new DiagnosticsStartupFilter(settings, store));
 
+        // nabiz arayüzünden tetiklenebilmesi için kendimizi tanıtıyoruz.
+        services.AddHostedService(provider => new AgentRegistration(
+            settings, provider.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>()));
+
         Console.WriteLine($"[nabiz] tanılama uçları açık: {settings.Path} " +
                           $"(dizin: {store.Directory_}, indirme: {(settings.AllowDownload ? "açık" : "kapalı")})");
         return services;

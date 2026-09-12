@@ -205,7 +205,8 @@ function renderRoleGroups(body) {
 
 function openRoleGroupDialog(group) {
   const isNew = !group;
-  const permItems = ["topology.read", "services.read", "traces.read", "project.manage", "admin.manage"]
+  const permItems = ["topology.read", "services.read", "traces.read", "project.manage",
+                     "diagnostics.manage", "admin.manage"]
     .map((p) => ({ value: p, label: t("perm." + p), hint: p }));
 
   openDialog(isNew ? t("admin.newRoleGroup") : t("admin.editRoleGroup"), (form) => {
@@ -293,6 +294,10 @@ function openProjectDialog(project) {
       el("span", { class: "field-hint", text: t("admin.appsHint") })));
     form.append(checkList("applications", appItems, project.applications || []));
 
+    form.append(el("div", { class: "field-label section", text: t("admin.diagToken") },
+      el("span", { class: "field-hint", text: t("admin.diagTokenHint") })));
+    form.append(el("input", { name: "diagToken", type: "password", placeholder: "••••••••" }));
+
     form.append(el("div", { class: "field-label section", text: t("admin.roleGroupsOf") },
       el("span", { class: "field-hint", text: t("admin.groupsHint") })));
     form.append(checkList("roleGroupIds",
@@ -313,6 +318,12 @@ function openProjectDialog(project) {
       name: v.name, description: v.description || "",
       applications: v.applications || [], roleGroupIds: v.roleGroupIds || [],
     });
+    // Jeton yalnızca doldurulduysa gönderilir: boş bırakmak "değiştirme"
+    // demek olmalı, "sil" demek değil.
+    if (v.diagToken) {
+      await apiJSON("/api/v1/admin/projects/" + project.id + "/diagnostics-token", "PUT",
+        { token: v.diagToken });
+    }
     await refreshAdmin();
   }, { submitLabel: isNew ? t("btn.create") : t("btn.save") });
 }

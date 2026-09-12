@@ -27,15 +27,18 @@ type Server struct {
 	db       string
 	identity *identity.Store
 	logins   *loginLimiter
-	log      *slog.Logger
+	// dumpDir, uygulamalardan çekilen dump dosyalarının tutulduğu dizin.
+	dumpDir string
+	log     *slog.Logger
 }
 
 // New, sorgu sunucusunu kurar.
-func New(conn driver.Conn, db string, ident *identity.Store, log *slog.Logger) *Server {
+func New(conn driver.Conn, db string, ident *identity.Store, dumpDir string, log *slog.Logger) *Server {
 	return &Server{
 		conn:     conn,
 		db:       db,
 		identity: ident,
+		dumpDir:  dumpDir,
 		// Beş dakikada on başarısız deneme: insan için bol, sözlük saldırısı
 		// için işe yaramaz.
 		logins: newLoginLimiter(10, 5*time.Minute),
@@ -69,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 
 	// --- denetim düzlemi ---
 	s.registerAdmin(mux)
+	s.registerDiagnostics(mux)
 
 	// Arayüz API ile aynı binary'den ve aynı kaynaktan sunulur.
 	if err := registerUI(mux); err != nil {
@@ -1015,6 +1019,11 @@ func writeErrorCode(w http.ResponseWriter, status int, msg, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
+}
+
+// jsonUnmarshal, dış bir servisin yanıtını çözer.
+func jsonUnmarshal(data []byte, out any) error {
+	return json.Unmarshal(data, out)
 }
 
 func writeError(w http.ResponseWriter, code int, err error) {

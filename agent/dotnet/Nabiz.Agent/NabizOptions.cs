@@ -18,6 +18,13 @@ public sealed class NabizOptions
     [JsonPropertyName("endpoint")]
     public string Endpoint { get; set; } = "http://localhost:4317";
 
+    /// <summary>
+    /// nabiz API adresi. Verilirse agent kendini tanıtır ve arayüzde
+    /// listelenir; tanılama uçları da oradan tetiklenebilir.
+    /// </summary>
+    [JsonPropertyName("apiUrl")]
+    public string ApiUrl { get; set; } = "";
+
     /// <summary>"grpc" (4317) ya da "http" (4318).</summary>
     [JsonPropertyName("protocol")]
     public string Protocol { get; set; } = "grpc";
@@ -174,6 +181,22 @@ public sealed class NabizOptions
         public int MaxCpuSeconds { get; set; } = 120;
 
         /// <summary>
+        /// Kayıtta bildirilecek port. 0 ise uygulamanın dinlediği ilk
+        /// porttan okunur.
+        /// </summary>
+        [JsonPropertyName("advertisedPort")]
+        public int AdvertisedPort { get; set; }
+
+        /// <summary>
+        /// Kayıtta bildirilecek adres. Boşsa nabiz kaydın geldiği IP'yi
+        /// kullanır — Kubernetes'te doğru olan budur. NAT, vekil ya da
+        /// Docker Desktop gibi kaynak IP'nin geri erişilebilir olmadığı
+        /// durumlarda doldurun.
+        /// </summary>
+        [JsonPropertyName("advertisedHost")]
+        public string AdvertisedHost { get; set; } = "";
+
+        /// <summary>
         /// Üretilen dosyalar HTTP ile indirilebilsin mi.
         /// </summary>
         /// <remarks>
@@ -250,6 +273,7 @@ public sealed class NabizOptions
     private void ApplyEnvironment()
     {
         Endpoint = Env("NABIZ_ENDPOINT") ?? Env("OTEL_EXPORTER_OTLP_ENDPOINT") ?? Endpoint;
+        ApiUrl = Env("NABIZ_API_URL") ?? ApiUrl;
         Protocol = Env("NABIZ_PROTOCOL") ?? NormalizeOtelProtocol(Env("OTEL_EXPORTER_OTLP_PROTOCOL")) ?? Protocol;
         ServiceName = Env("NABIZ_SERVICE_NAME") ?? Env("OTEL_SERVICE_NAME") ?? ServiceName;
         ServiceNamespace = Env("NABIZ_SERVICE_NAMESPACE") ?? ServiceNamespace;

@@ -24,6 +24,10 @@ const (
 	PermTracesRead Permission = "traces.read"
 	// PermProjectManage, projeye uygulama ekleyip çıkarmayı sağlar.
 	PermProjectManage Permission = "project.manage"
+	// PermDiagnostics, uygulamalardan CPU profili ve bellek dump'ı almayı
+	// sağlar. Ayrı bir yetki: bellek dump'ı bağlantı dizesi, jeton ve müşteri
+	// verisi içerdiği için trace okumakla aynı şey değildir.
+	PermDiagnostics Permission = "diagnostics.manage"
 	// PermAdmin, denetim düzleminin tamamını yönetir: kullanıcı, rol grubu,
 	// proje. Yalnızca sistem yöneticilerine verilir.
 	PermAdmin Permission = "admin.manage"
@@ -31,7 +35,8 @@ const (
 
 // AllPermissions, arayüzün yetki seçicisini doldurmak için.
 var AllPermissions = []Permission{
-	PermTopologyRead, PermServicesRead, PermTracesRead, PermProjectManage, PermAdmin,
+	PermTopologyRead, PermServicesRead, PermTracesRead, PermProjectManage,
+	PermDiagnostics, PermAdmin,
 }
 
 // ValidPermission, bilinmeyen yetkilerin veritabanına sızmasını engeller.
@@ -87,6 +92,53 @@ type Project struct {
 
 	Applications []string       `json:"applications,omitempty"`
 	RoleGroups   []RoleGroupRef `json:"roleGroups,omitempty"`
+}
+
+// AgentInstance, telemetri gönderen ve kendini tanıtan bir uygulama örneği.
+type AgentInstance struct {
+	ID           string `json:"id"`
+	ServiceName  string `json:"serviceName"`
+	InstanceID   string `json:"instanceId"`
+	Hostname     string `json:"hostname,omitempty"`
+	K8sPod       string `json:"pod,omitempty"`
+	K8sNamespace string `json:"namespace,omitempty"`
+	PID          int    `json:"pid"`
+	AgentVersion string `json:"agentVersion,omitempty"`
+
+	// DiagPort ve DiagPath, tanılama ucunun yeri. Host bilerek saklanmaz:
+	// nabiz her zaman kaydın geldiği IP'yi kullanır, agent'ın iddia ettiği
+	// adresi değil. Aksi halde sahte bir kayıt, nabiz'i jetonu saldırganın
+	// adresine göndermeye ikna edebilirdi.
+	SourceIP string `json:"sourceIp"`
+	// AdvertisedHost, agent'ın bildirdiği adres. YALNIZCA doğrulanmış
+	// kayıtlarda kullanılır: jetonu bilen taraf kimliğini zaten kanıtlamıştır.
+	// Doğrulanmamış kayıtlarda her zaman SourceIP kullanılır, aksi halde
+	// sahte bir kayıt nabiz'i başka bir hedefe yönlendirebilirdi.
+	AdvertisedHost string `json:"advertisedHost,omitempty"`
+	DiagPort       int    `json:"diagPort"`
+	DiagPath       string `json:"diagPath"`
+	DiagReady      bool   `json:"diagReady"`
+
+	// Verified, kaydın proje jetonuyla doğrulandığını söyler. Doğrulanmamış
+	// örneklerde dump tetiklenemez.
+	Verified  bool      `json:"verified"`
+	ProjectID string    `json:"projectId,omitempty"`
+	FirstSeen time.Time `json:"firstSeen"`
+	LastSeen  time.Time `json:"lastSeen"`
+}
+
+// DumpArtifact, nabiz'in bir uygulamadan çekip sakladığı dosya.
+type DumpArtifact struct {
+	ID          string    `json:"id"`
+	InstanceID  string    `json:"instanceId"`
+	ServiceName string    `json:"serviceName"`
+	Kind        string    `json:"kind"`
+	Filename    string    `json:"filename"`
+	Bytes       int64     `json:"bytes"`
+	CreatedAt   time.Time `json:"createdAt"`
+	CreatedBy   string    `json:"createdBy"`
+	Status      string    `json:"status"`
+	Error       string    `json:"error,omitempty"`
 }
 
 // Session, giriş yapmış bir tarayıcı oturumu.

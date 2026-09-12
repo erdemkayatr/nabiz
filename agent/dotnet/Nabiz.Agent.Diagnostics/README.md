@@ -32,6 +32,29 @@ builder.Services.AddNabizDiagnostics();
 }
 ```
 
+## nabiz arayüzünden
+
+`nabiz.json`'da `apiUrl` tanımlıysa agent kendini nabiz'e tanıtır ve
+**Tanılama** menüsünde listelenir; dump'ı oradan tek tıkla alabilirsiniz.
+
+```json
+"apiUrl": "http://nabiz-api:8080",
+"diagnostics": {
+  "enabled": true,
+  "token": "...",
+  "allowDownload": true,
+  "advertisedHost": ""
+}
+```
+
+nabiz, dump isteğini **kaydın geldiği IP'ye** atar; agent'ın iddia ettiği
+adrese değil. Kaynak IP geri erişilebilir değilse (NAT, vekil, Docker Desktop)
+`advertisedHost` doldurulur — bu yalnızca jetonla doğrulanmış kayıtlarda
+dikkate alınır.
+
+`allowDownload` kapalıysa nabiz dosyayı çekemez; dosya uygulamanın diskinde
+kalır ve arayüzde "indirme kapalı" görünür.
+
 ## Uçlar
 
 Hepsi `X-Nabiz-Token` başlığı ister.
