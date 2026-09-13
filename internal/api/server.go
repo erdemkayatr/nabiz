@@ -6,6 +6,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -28,17 +30,26 @@ type Server struct {
 	identity *identity.Store
 	logins   *loginLimiter
 	// dumpDir, uygulamalardan çekilen dump dosyalarının tutulduğu dizin.
-	dumpDir string
-	log     *slog.Logger
+	dumpDir   string
+	retention DumpRetention
+	// inflight, koşan dump işlemlerinin iptal fonksiyonları.
+	inflight   map[string]context.CancelFunc
+	inflightMu sync.Mutex
+	log        *slog.Logger
 }
+
+// SetDumpRetention, saklama kurallarını değiştirir.
+func (s *Server) SetDumpRetention(r DumpRetention) { s.retention = r }
 
 // New, sorgu sunucusunu kurar.
 func New(conn driver.Conn, db string, ident *identity.Store, dumpDir string, log *slog.Logger) *Server {
 	return &Server{
-		conn:     conn,
-		db:       db,
-		identity: ident,
-		dumpDir:  dumpDir,
+		conn:      conn,
+		db:        db,
+		identity:  ident,
+		dumpDir:   dumpDir,
+		retention: DefaultDumpRetention(),
+		inflight:  map[string]context.CancelFunc{},
 		// Beş dakikada on başarısız deneme: insan için bol, sözlük saldırısı
 		// için işe yaramaz.
 		logins: newLoginLimiter(10, 5*time.Minute),

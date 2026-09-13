@@ -290,6 +290,14 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*DumpArtifact, erro
 	return &a, err
 }
 
+// CancelArtifact, kaydı kullanıcının durdurduğu şeklinde işaretler. Yalnızca
+// hâlâ bekleyen bir kayıt durdurulabilir: dosya diske inmişse iş bitmiştir.
+func (s *Store) CancelArtifact(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE dump_artifacts SET status = 'cancelled', error = '' WHERE id = $1 AND status = 'pending'`, id)
+	return err
+}
+
 // DeleteArtifact, kaydı siler.
 func (s *Store) DeleteArtifact(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM dump_artifacts WHERE id = $1`, id)

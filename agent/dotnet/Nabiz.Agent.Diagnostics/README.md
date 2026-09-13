@@ -66,6 +66,13 @@ Hepsi `X-Nabiz-Token` başlığı ister.
 | `GET /nabiz/diag` | Üretilen dosyaları listeler |
 | `GET /nabiz/diag/{dosya}` | İndirir (`allowDownload` gerekir) |
 | `DELETE /nabiz/diag/{dosya}` | Siler |
+| `POST /nabiz/diag/cancel` | Koşan işi durdurur |
+
+`cancel`, `{"cancelled": bool, "reason": string}` döner. CPU profili
+kesilebilir: oturum kapatılır ve o ana kadarki örnekler geçerli bir dosya
+oluşturur. Bellek dump'ı kesilemez — `WriteDump` runtime'a gidiyor ve runtime
+süreci askıya alıp dosyayı yazıyor; yarıda kesmeye çalışmak askıya alınmış
+bir süreç bırakma riski taşır. O durumda `cancelled: false` ve nedeni döner.
 
 ```bash
 curl -X POST -H "X-Nabiz-Token: $TOKEN" \

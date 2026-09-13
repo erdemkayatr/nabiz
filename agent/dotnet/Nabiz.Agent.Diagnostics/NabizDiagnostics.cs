@@ -136,6 +136,23 @@ internal static class DiagnosticsEndpoints
                     await WriteAsync(context, Describe(file, settings)).ConfigureAwait(false);
                     return;
                 }
+                case ("POST", "cancel"):
+                {
+                    var kind = store.RunningKind;
+                    var stopped = store.Cancel();
+                    Log(context, $"durdurma isteği ({(kind.Length > 0 ? kind : "boşta")}) → " +
+                                 (stopped ? "durduruldu" : "durdurulamadı"));
+                    await WriteAsync(context, new
+                    {
+                        cancelled = stopped,
+                        running = kind,
+                        reason = stopped ? null
+                            : kind == "memory"
+                                ? "bellek dump'ı başladıktan sonra kesilemez: runtime süreci askıya alıp dosyayı yazıyor"
+                                : "durdurulacak bir işlem yok",
+                    }).ConfigureAwait(false);
+                    return;
+                }
                 case ("GET", ""):
                     await WriteAsync(context, new
                     {
@@ -182,6 +199,7 @@ internal static class DiagnosticsEndpoints
                         {
                             $"POST {settings.Path}/cpu?seconds=20",
                             $"POST {settings.Path}/memory?type=heap|full|mini|triage",
+                            $"POST {settings.Path}/cancel",
                             $"GET {settings.Path}",
                             $"GET {settings.Path}/{{dosya}}",
                             $"DELETE {settings.Path}/{{dosya}}",

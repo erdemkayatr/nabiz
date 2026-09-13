@@ -381,3 +381,32 @@ pre.stack {
 .detail-section.pad .field-hint { text-transform: none; letter-spacing: 0; font-weight: 400; }
 a.link-btn { text-decoration: none; display: inline-block; }
 .link-btn[disabled] { opacity: .5; cursor: default; text-decoration: none; }
+
+/* ==================== DUMP DEPOLAMA ==================== */
+.storage-bar { padding: 4px 15px 12px 15px; }
+.storage-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.storage-bar .bd-bar { height: 7px; }
+.bd-seg.storage-ok { background: var(--ok); }
+.bd-seg.storage-warn { background: var(--warn); }
+.bd-seg.storage-err { background: var(--err); }
+
+/* ==================== DUMP İLERLEME ==================== */
+.dialog.capture { max-width: 430px; }
+.cap-target { margin-bottom: 12px; }
+.cap-state { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 14px; margin-bottom: 12px; }
+.cap-note { color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
+.cap-error { color: var(--err); font-size: 12.5px; margin-top: 6px; word-break: break-word; }
+.cap-download { margin-left: auto; text-decoration: none; padding: 4px 12px; }
+.btn.danger-btn { background: var(--err); border-color: var(--err); color: #fff; font-weight: 600; }
+.btn.danger-btn:hover { filter: brightness(1.08); }
+.spinner {
+  /* inline-block şart: satır içinde kullanıldığında salt "inline" bir öğe
+     genişlik/yükseklik almaz ve çember 4 piksellik bir çizgiye iner.
+     Flex kapsayıcı içinde zaten bloğa dönüştürülüyor, orada da sorun yok. */
+  display: inline-block; vertical-align: -2px; margin-right: 8px;
+  width: 14px; height: 14px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

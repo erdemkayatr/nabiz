@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Nabiz.Agent</PackageId>
-    <Version>0.6.1</Version>
+    <Version>0.7.0</Version>
     <Authors>nabiz</Authors>
     <Description>
       nabiz APM agent'ı. Paketi eklemek yeterlidir: derlemede nabiz.json

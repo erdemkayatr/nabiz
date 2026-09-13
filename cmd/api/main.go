@@ -97,10 +97,18 @@ func main() {
 	// Süresi geçmiş oturumları düzenli temizle.
 	go purgeSessions(ctx, ident, log)
 
+	apiServer := api.New(store.Conn(), cfg.Database, ident, dumpDir, log)
+
+	retention := api.DefaultDumpRetention()
+	retention.MaxAge = time.Duration(config.Int("DUMP_RETENTION_DAYS", 7)) * 24 * time.Hour
+	retention.MaxBytes = int64(config.Int("DUMP_QUOTA_GB", 10)) << 30
+	apiServer.SetDumpRetention(retention)
+	apiServer.StartDumpJanitor(ctx)
+
 	addr := config.String("API_ADDR", ":8080")
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.New(store.Conn(), cfg.Database, ident, dumpDir, log).Handler(),
+		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -111,7 +119,9 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("nabiz-api çalışıyor", "addr", addr, "clickhouse", cfg.Addrs, "dump_dir", dumpDir)
+	log.Info("nabiz-api çalışıyor", "addr", addr, "clickhouse", cfg.Addrs,
+		"dump_dir", dumpDir, "dump_kota_gb", retention.MaxBytes>>30,
+		"dump_saklama_gun", int(retention.MaxAge.Hours()/24))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("api kapandı", "err", err)
 		os.Exit(1)

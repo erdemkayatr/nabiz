@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>Nabiz.Agent.Diagnostics</PackageId>
-    <Version>0.6.1</Version>
+    <Version>0.7.0</Version>
     <Authors>nabiz</Authors>
     <Description>
       nabiz agent'ı için talep üzerine CPU profili ve bellek dump'ı. Ayrı bir
@@ -21,7 +21,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Nabiz.Agent" Version="0.6.1" />
+    <PackageReference Include="Nabiz.Agent" Version="0.7.0" />
     <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.745401" />
   </ItemGroup>
 

@@ -91,6 +91,8 @@ services:
       # Secret'tan gelmeli; anahtar değişirse saklanmış jetonlar açılamaz.
       NABIZ_SECRET_KEY: yerel-gelistirme-sifreleme-anahtari
       NABIZ_DUMP_DIR: /var/lib/nabiz/dumps
+      NABIZ_DUMP_QUOTA_GB: "5"
+      NABIZ_DUMP_RETENTION_DAYS: "3"
     volumes:
       - nabiz-dumps:/var/lib/nabiz/dumps
     ports:

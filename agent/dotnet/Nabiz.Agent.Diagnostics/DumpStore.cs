@@ -25,6 +25,10 @@ public sealed class DumpStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _directory;
 
+    // Koşan işlemi dışarıdan durdurabilmek için.
+    private CancellationTokenSource? _running;
+    private string _runningKind = "";
+
     /// <summary>Depoyu kurar ve çıktı dizinini hazırlar.</summary>
     public DumpStore(NabizOptions.DiagnosticsSettings settings)
     {
@@ -37,6 +41,34 @@ public sealed class DumpStore
 
     /// <summary>Çıktı dizini.</summary>
     public string Directory_ => _directory;
+
+    /// <summary>Şu an koşan işlemin türü; yoksa boş.</summary>
+    public string RunningKind => _runningKind;
+
+    /// <summary>
+    /// Koşan işlemi durdurur.
+    /// </summary>
+    /// <returns>
+    /// İşlem gerçekten kesilebildiyse true.
+    /// </returns>
+    /// <remarks>
+    /// CPU profili istenildiği an kesilebilir: oturum kapatılır ve o ana
+    /// kadarki örnekler geçerli bir dosya oluşturur.
+    ///
+    /// Bellek dump'ı kesilemez. WriteDump çağrısı runtime'a gidiyor ve
+    /// runtime süreci askıya alıp dosyayı yazıyor; bu iş başladıktan sonra
+    /// geri döndürülemez. Yarıda kesmeye çalışmak askıya alınmış bir süreç
+    /// bırakma riski taşır.
+    /// </remarks>
+    public bool Cancel()
+    {
+        var cts = _running;
+        if (cts is null) return false;
+        if (_runningKind == "memory") return false;
+
+        try { cts.Cancel(); return true; }
+        catch (ObjectDisposedException) { return false; }
+    }
 
     /// <summary>Üretilmiş dosyaları yeniden eskiye sıralı verir.</summary>
     public IReadOnlyList<DumpFile> List()
@@ -80,6 +112,9 @@ public sealed class DumpStore
     {
         seconds = Math.Clamp(seconds, 1, Math.Max(1, _settings.MaxCpuSeconds));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _running = linked;
+        _runningKind = "cpu";
         try
         {
             var path = System.IO.Path.Combine(_directory, $"cpu-{Stamp()}.nettrace");
@@ -97,24 +132,33 @@ public sealed class DumpStore
                 await session.EventStream.CopyToAsync(output).ConfigureAwait(false);
             }, CancellationToken.None);
 
+            var stoppedEarly = false;
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(seconds), linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Erken durdurma bir hata değil: o ana kadarki örnekler
+                // geçerli bir profil oluşturur.
+                stoppedEarly = true;
             }
             finally
             {
-                // İstek iptal edilse bile oturumu kapat: açık kalan bir
-                // EventPipe oturumu sürekli örnekleme maliyeti demektir.
+                // İptal edilse bile oturumu kapat: açık kalan bir EventPipe
+                // oturumu sürekli örnekleme maliyeti demektir.
                 session.Stop();
             }
             await copy.ConfigureAwait(false);
-
+            if (stoppedEarly) Console.WriteLine("[nabiz] CPU profili erken durduruldu");
             Trim();
             var info = new FileInfo(path);
             return new DumpFile(info.Name, "cpu", info.Length, info.CreationTimeUtc) { Path = info.FullName };
         }
         finally
         {
+            _running = null;
+            _runningKind = "";
             _gate.Release();
         }
     }
@@ -123,6 +167,9 @@ public sealed class DumpStore
     public async Task<DumpFile> CaptureMemoryAsync(DumpType type, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _running = linked;
+        _runningKind = "memory";
         try
         {
             var path = System.IO.Path.Combine(_directory, $"memory-{type.ToString().ToLowerInvariant()}-{Stamp()}.dmp");
@@ -144,6 +191,8 @@ public sealed class DumpStore
         }
         finally
         {
+            _running = null;
+            _runningKind = "";
             _gate.Release();
         }
     }

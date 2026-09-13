@@ -53,6 +53,10 @@ spec:
               valueFrom:
                 secretKeyRef: { name: nabiz-secret-key, key: key, optional: true }
             - { name: NABIZ_DUMP_DIR, value: "/var/lib/nabiz/dumps" }
+            # emptyDir sizeLimit ile uyumlu tutun: kota dolmadan disk dolarsa
+            # pod tahliye edilir.
+            - { name: NABIZ_DUMP_QUOTA_GB, value: "15" }
+            - { name: NABIZ_DUMP_RETENTION_DAYS, value: "7" }
           ports:
             - { containerPort: 8080 }
           readinessProbe:

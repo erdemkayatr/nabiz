@@ -150,6 +150,26 @@ değil: bellek dump'ı bağlantı dizesi, jeton ve müşteri verisi içerir.
 > dosyaları üzerinden geçirir: nabiz'i ele geçiren, izlediği her uygulamanın
 > süreç belleğini alabilir.
 
+### İlerleme ve durdurma
+
+Dump'ı başlattığınızda bir ilerleme penceresi açılır. Süre tahmini
+verilmiyor: bir bellek dump'ının ne kadar süreceği sürecin belleğine bağlı ve
+uydurma bir yüzde çubuğu bekleyeni yanıltmaktan başka işe yaramaz — geçen
+süre gösteriliyor, o gerçek bilgidir.
+
+Pencereyi kapatmak işi durdurmaz; arka planda sürer ve biten dosya listede
+belirir. Durdurmak ayrı bir düğmedir ve türe göre farklı davranır:
+
+| Tür | Durdur |
+|---|---|
+| CPU profili | **Kesilir.** O ana kadarki örnekler geçerli bir profil olarak kaydedilir; dosya normal şekilde indirilir. Ölçümde 20 saniyelik bir profil 6. saniyede durduruldu ve 5.4 MB'lık okunabilir bir `.nettrace` çıktı. |
+| Bellek dump'ı | **Kesilemez.** `WriteDump` runtime'a gidiyor, runtime süreci askıya alıp dosyayı yazıyor; başladıktan sonra geri dönüşü yok. Pencere bunu söyler ve iş bitene kadar beklenir. |
+
+Durdurma isteği uygulamaya gider. Uygulama işi kesebildiyse nabiz
+**beklemeyi sürdürür** ve kısmi dosyayı indirir — beklemeyi bırakmak,
+kullanıcının topladığı veriyi çöpe atmak olurdu. nabiz beklemeyi yalnızca
+uygulamaya hiç ulaşamadığında bırakır; kayıt o zaman "durduruldu" olur.
+
 Dump alınırken süreç **askıya alınır**: 540 MB'lık bir dump 3.8 saniye sürdü
 ve o süre boyunca uygulama istek işlemedi. Üretimde trafiği kesilmiş bir
 örnekte alın. Ayrıntılar:
@@ -286,7 +306,7 @@ Beş ekran var:
 | **Topoloji** | İsteklerden çıkarılan canlı servis grafiği: dairesel düğümler, kenarlarda çağrı hızıyla akan noktalar. Düğüm sürüklenir, tuval yakınlaştırılır. Düğüme ya da kenara tıklayınca metrik paneli açılır ve ilgisiz kısımlar soluklaşır. Seviye seçici ile servis / k8s workload / k8s namespace görünümleri. |
 | **Servisler** | Servis başına hız, hata oranı ve p50/p95/p99. |
 | **Trace'ler** | Servis, süre ve hata filtreleriyle arama; satıra tıklayınca şelale görünümü — SQL sorgusu ve HTTP hedefi dahil. |
-| **Tanılama** | Çalışan örnekler ve tek tıkla CPU profili / bellek dump'ı. Alınan dosyalar listelenir ve indirilir. `diagnostics.manage` yetkisi ister. |
+| **Tanılama** | Çalışan örnekler ve tek tıkla CPU profili / bellek dump'ı. İlerleme penceresi işi izler ve CPU profilini durdurabilir. Alınan dosyalar listelenir ve indirilir. `diagnostics.manage` yetkisi ister. |
 | **Yönetim** | Kullanıcılar, rol grupları ve projeler. Proje düzenleme ekranı, telemetri gönderen servisleri listeler; uygulamayı elle yazmak yerine listeden seçersiniz — yazım hatası yüzünden veri göremeyen bir proje oluşmaz. |
 
 Arayüz **Türkçe ve İngilizce**. Dil, tarayıcı diline göre seçilir, üst çubuktan

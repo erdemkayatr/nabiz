@@ -34,6 +34,8 @@ func (s *Server) registerDiagnostics(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/diagnostics/artifacts", diag(s.handleListArtifacts))
 	mux.HandleFunc("POST /api/v1/diagnostics/instances/{id}/capture", diag(s.handleCapture))
 	mux.HandleFunc("GET /api/v1/diagnostics/artifacts/{id}/download", diag(s.handleDownloadArtifact))
+	mux.HandleFunc("POST /api/v1/diagnostics/artifacts/{id}/cancel", diag(s.handleCancelCapture))
+	mux.HandleFunc("GET /api/v1/diagnostics/artifacts/{id}", diag(s.handleGetArtifact))
 	mux.HandleFunc("DELETE /api/v1/diagnostics/artifacts/{id}", diag(s.handleDeleteArtifact))
 
 	// Projenin tanılama jetonu yalnızca yöneticiler tarafından girilir.
@@ -123,7 +125,17 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, map[string]any{"artifacts": artifacts, "storage": s.dumpDir})
+	used, files := s.dumpUsage()
+	writeJSON(w, map[string]any{
+		"artifacts": artifacts,
+		"storage": map[string]any{
+			"directory":     s.dumpDir,
+			"usedBytes":     used,
+			"quotaBytes":    s.retention.MaxBytes,
+			"files":         files,
+			"retentionDays": int(s.retention.MaxAge.Hours() / 24),
+		},
+	})
 }
 
 // handleCapture, uygulamadan dump ister ve dosyayı nabiz'e çeker.
@@ -196,10 +208,31 @@ func (s *Server) fetchDump(instance *identity.AgentInstance, token, kind string,
 	ctx, cancel := context.WithTimeout(context.Background(), dumpFetchTimeout)
 	defer cancel()
 
+	// Durdurma isteği bu bekleyişi kesebilsin diye iptal fonksiyonunu
+	// kaydediyoruz. İş bittiğinde kayıt silinir; aksi halde tamamlanmış
+	// işlerin iptal fonksiyonları haritada birikir.
+	s.inflightMu.Lock()
+	s.inflight[artifactID] = cancel
+	s.inflightMu.Unlock()
+	defer func() {
+		s.inflightMu.Lock()
+		delete(s.inflight, artifactID)
+		s.inflightMu.Unlock()
+	}()
+
 	fail := func(format string, args ...any) {
 		message := fmt.Sprintf(format, args...)
+		// İptal edilmiş bir işi "başarısız" diye raporlamak yanıltıcı olur:
+		// kullanıcı bilerek durdurdu. Context iptal edildiği için sonraki
+		// veritabanı yazması da ondan bağımsız olmalı.
+		clean := context.WithoutCancel(ctx)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			s.log.Info("dump durduruldu", "artifact", artifactID)
+			_ = s.identity.CancelArtifact(clean, artifactID)
+			return
+		}
 		s.log.Error("dump alınamadı", "artifact", artifactID, "err", message)
-		_ = s.identity.FailArtifact(ctx, artifactID, message)
+		_ = s.identity.FailArtifact(clean, artifactID, message)
 	}
 
 	base := instance.DiagPath
@@ -235,7 +268,7 @@ func (s *Server) fetchDump(instance *identity.AgentInstance, token, kind string,
 		Error string `json:"error"`
 	}
 	if err := doJSON(ctx, client, http.MethodPost, root+"/"+kind+query, token, &created); err != nil {
-		fail("uygulamadan dump istenemedi: %v", err)
+		fail("%s", explainFetchError(err, host, instance.DiagPort))
 		return
 	}
 	if created.ID == "" {
@@ -252,7 +285,7 @@ func (s *Server) fetchDump(instance *identity.AgentInstance, token, kind string,
 	req.Header.Set("X-Nabiz-Token", token)
 	resp, err := client.Do(req)
 	if err != nil {
-		fail("dosya indirilemedi: %v", err)
+		fail("%s", explainFetchError(err, host, instance.DiagPort))
 		return
 	}
 	defer resp.Body.Close()
@@ -293,6 +326,108 @@ func (s *Server) fetchDump(instance *identity.AgentInstance, token, kind string,
 	}
 	s.log.Info("dump alındı", "artifact", artifactID, "service", instance.ServiceName,
 		"bytes", written, "by", by)
+}
+
+// handleCancelCapture, koşan bir dump işlemini durdurur.
+//
+// İki taraflı: nabiz kendi beklemesini keser, ayrıca uygulamaya da durdurma
+// isteği gönderir. CPU profili gerçekten kesilir; bellek dump'ı runtime
+// yazmaya başladıysa kesilemez ve yanıt bunu açıkça söyler.
+func (s *Server) handleCancelCapture(w http.ResponseWriter, r *http.Request) {
+	artifactID := r.PathValue("id")
+	artifact, err := s.identity.GetArtifact(r.Context(), artifactID)
+	if err != nil {
+		writeIdentityError(w, err)
+		return
+	}
+	if !scopeFor(r).allows(artifact.ServiceName) {
+		writeErrorCode(w, http.StatusForbidden, "bu servise erişiminiz yok", "forbidden")
+		return
+	}
+
+	if artifact.Status != "pending" {
+		writeErrorCode(w, http.StatusConflict, "bu iş zaten bitmiş", "not_running")
+		return
+	}
+
+	reached, agentStopped, reason := s.askAgentToStop(r.Context(), artifact)
+
+	// Kendi beklememizi yalnızca uygulamaya ulaşamadığımızda kesiyoruz.
+	//
+	// Uygulama CPU profilini kesebildiyse elinde o ana kadarki örneklerle
+	// geçerli bir dosya var; beklemeyi bırakırsak kullanıcının topladığı
+	// veriyi çöpe atmış oluruz. Bellek dump'ı kesilemiyorsa da beklemek
+	// doğrusu: süreç dosyayı yazmaya devam ediyor, kaydı "iptal" diye
+	// işaretlemek gerçeğe aykırı olurdu.
+	local := false
+	if !reached {
+		s.inflightMu.Lock()
+		cancel, running := s.inflight[artifactID]
+		s.inflightMu.Unlock()
+		if running {
+			cancel()
+			local = true
+		}
+		reason = "uygulamaya ulaşılamadı; nabiz beklemeyi bıraktı"
+	}
+
+	s.log.Info("dump durdurma isteği", "artifact", artifactID,
+		"ulasildi", reached, "agent_durdu", agentStopped, "yerel", local,
+		"by", accessFrom(r).User.Email)
+
+	writeJSON(w, map[string]any{
+		"cancelled":    agentStopped || local,
+		"agentStopped": agentStopped,
+		"partial":      agentStopped,
+		"reason":       reason,
+	})
+}
+
+// askAgentToStop, uygulamaya durdurma isteği gönderir.
+func (s *Server) askAgentToStop(ctx context.Context, artifact *identity.DumpArtifact) (reached, stopped bool, reason string) {
+	if artifact.InstanceID == "" {
+		return false, false, ""
+	}
+	instance, token, err := s.identity.GetAgent(ctx, artifact.InstanceID)
+	if err != nil {
+		return false, false, ""
+	}
+	host := instance.SourceIP
+	if instance.AdvertisedHost != "" {
+		host = instance.AdvertisedHost
+	}
+	base := instance.DiagPath
+	if base == "" {
+		base = "/nabiz/diag"
+	}
+	url := fmt.Sprintf("http://%s%s/cancel",
+		net.JoinHostPort(host, strconv.Itoa(instance.DiagPort)), base)
+
+	var result struct {
+		Cancelled bool   `json:"cancelled"`
+		Reason    string `json:"reason"`
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	if err := doJSON(ctx, client, http.MethodPost, url, token, &result); err != nil {
+		s.log.Warn("durdurma isteği uygulamaya ulaşmadı", "artifact", artifact.ID, "err", err)
+		return false, false, ""
+	}
+	return true, result.Cancelled, result.Reason
+}
+
+// handleGetArtifact, tek kaydın durumunu verir; arayüz ilerleme penceresini
+// bununla tazeler.
+func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
+	artifact, err := s.identity.GetArtifact(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeIdentityError(w, err)
+		return
+	}
+	if !scopeFor(r).allows(artifact.ServiceName) {
+		writeErrorCode(w, http.StatusForbidden, "bu servise erişiminiz yok", "forbidden")
+		return
+	}
+	writeJSON(w, artifact)
 }
 
 func (s *Server) handleDownloadArtifact(w http.ResponseWriter, r *http.Request) {
@@ -365,6 +500,33 @@ func (s *Server) handleSetDiagToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// explainFetchError, ham ağ hatasını operatörün ne yapacağını söyleyen bir
+// mesaja çevirir. "dial tcp 192.168.65.1:5199: connect: connection refused"
+// doğru ama işe yaramaz bir cümle.
+func explainFetchError(err error, host string, port int) string {
+	text := err.Error()
+	target := fmt.Sprintf("%s:%d", host, port)
+
+	switch {
+	case strings.Contains(text, "connection refused"):
+		return fmt.Sprintf("uygulamaya ulaşılamadı (%s): örnek kapanmış olabilir "+
+			"ya da tanılama ucu bu portta dinlemiyor", target)
+	case strings.Contains(text, "no such host"):
+		return fmt.Sprintf("adres çözümlenemedi (%s): advertisedHost yanlış olabilir", target)
+	case strings.Contains(text, "i/o timeout") || strings.Contains(text, "context deadline exceeded"):
+		return fmt.Sprintf("uygulama yanıt vermedi (%s): ağ erişimi engelli olabilir "+
+			"ya da dump beklenenden uzun sürdü", target)
+	case strings.Contains(text, "HTTP 401"):
+		return "uygulama jetonu reddetti: projedeki tanılama jetonu uygulamadaki " +
+			"nabiz.json değeriyle aynı mı?"
+	case strings.Contains(text, "HTTP 404"):
+		return fmt.Sprintf("tanılama ucu bulunamadı (%s): uygulamada "+
+			"Nabiz.Agent.Diagnostics kurulu ve diagnostics.enabled açık mı?", target)
+	default:
+		return "uygulamadan dump alınamadı: " + text
+	}
 }
 
 // doJSON, jetonlu bir istek atıp JSON yanıtı çözer.
