@@ -19,3 +19,4 @@ agent/dotnet/local-feed/
 agent/dotnet/Shop.Sample/nabiz.json
 agent/dotnet/**/*.nettrace
 agent/dotnet/**/*.dmp
+clean-history.sh
