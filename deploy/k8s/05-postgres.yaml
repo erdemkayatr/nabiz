@@ -1,12 +1,12 @@
-# nabiz'in denetim düzlemi deposu: kullanıcılar, rol grupları, projeler,
-# uygulama atamaları ve oturumlar.
+# nabiz's control plane store: users, role groups, projects, application
+# assignments and sessions.
 #
-# Telemetri ClickHouse'ta, kimlik burada. Ayrım kasıtlı: ClickHouse
-# append-only ve nihai tutarlı; kimlik verisi benzersizlik kısıtı, transaction
-# ve yerinde güncelleme ister.
+# Telemetry lives in ClickHouse, identity here. The split is deliberate:
+# ClickHouse is append-only and eventually consistent, while identity data needs
+# uniqueness constraints, transactions and in-place updates.
 #
-# Üretimde yönetilen bir PostgreSQL (RDS, Cloud SQL, CNPG) kullanın ve bu
-# dosyayı yalnızca Secret ile değiştirin.
+# In production use a managed PostgreSQL (RDS, Cloud SQL, CNPG) and change this
+# file only through a Secret.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -16,7 +16,7 @@ type: Opaque
 stringData:
   POSTGRES_USER: nabiz
   POSTGRES_DB: nabiz
-  # ÜRETİMDE DEĞİŞTİRİN. Örn: kubectl create secret generic nabiz-postgres \
+    # CHANGE THIS IN PRODUCTION. e.g. kubectl create secret generic nabiz-postgres \
   #   --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" ...
   POSTGRES_PASSWORD: degistirin-lutfen
 ---

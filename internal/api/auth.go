@@ -11,10 +11,10 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/identity"
 )
 
-// SessionCookie, oturum çerezinin adı.
+// SessionCookie is the name of the session cookie.
 const SessionCookie = "nabiz_session"
 
-// SessionTTL, oturum ömrü.
+// SessionTTL is how long a session lives.
 const SessionTTL = 12 * time.Hour
 
 type ctxKey int
@@ -24,19 +24,19 @@ const (
 	ctxToken
 )
 
-// accessFrom, istek bağlamındaki yetkilendirme bilgisini verir.
+// accessFrom returns the authorization context attached to a request.
 func accessFrom(r *http.Request) *identity.Access {
 	a, _ := r.Context().Value(ctxAccess).(*identity.Access)
 	return a
 }
 
-// --- giriş deneme sınırlayıcı ---
+// --- login attempt limiter ---
 
-// loginLimiter, aynı kaynaktan gelen parola denemelerini sınırlar.
+// loginLimiter caps password attempts coming from the same source.
 //
-// Kalıcı bir depo değil, kasıtlı: amaç kaba kuvvet denemesini pahalı kılmak,
-// kusursuz bir savunma kurmak değil. Süreç yeniden başladığında sayaç
-// sıfırlanır ve bu kabul edilebilir.
+// Deliberately not a persistent store: the point is to make brute force
+// expensive, not to build a perfect defence. The counter resets when the
+// process restarts, and that is acceptable.
 type loginLimiter struct {
 	mu       sync.Mutex
 	attempts map[string]*attemptWindow
@@ -53,7 +53,7 @@ func newLoginLimiter(max int, window time.Duration) *loginLimiter {
 	return &loginLimiter{attempts: map[string]*attemptWindow{}, max: max, window: window}
 }
 
-// allow, denemeye izin verilip verilmediğini söyler ve sayacı artırır.
+// allow says whether the attempt is permitted, and increments the counter.
 func (l *loginLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -69,14 +69,14 @@ func (l *loginLimiter) allow(key string) bool {
 	return w.count <= l.max
 }
 
-// reset, başarılı girişten sonra sayacı temizler.
+// clear resets the counter after a successful login.
 func (l *loginLimiter) clear(key string) {
 	l.mu.Lock()
 	delete(l.attempts, key)
 	l.mu.Unlock()
 }
 
-// sweep, süresi dolmuş kayıtları atar; map süresiz büyümesin.
+// sweep drops expired entries so the map does not grow without bound.
 func (l *loginLimiter) sweep(now time.Time) {
 	if len(l.attempts) < 1000 {
 		return
@@ -88,11 +88,11 @@ func (l *loginLimiter) sweep(now time.Time) {
 	}
 }
 
-// --- ara katman ---
+// --- middleware ---
 
-// withSession, çerezden oturumu çözer ve yetkilendirme bağlamını isteğe
-// iliştirir. Oturum yoksa isteği reddetmez: kimin neyi reddedeceğine
-// requireAuth karar verir.
+// withSession resolves the session from the cookie and attaches the
+// authorization context to the request. It does not reject requests without a
+// session: requireAuth decides what gets rejected.
 func (s *Server) withSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(SessionCookie)
@@ -102,8 +102,8 @@ func (s *Server) withSession(next http.Handler) http.Handler {
 		}
 		user, err := s.identity.LookupSession(r.Context(), cookie.Value)
 		if err != nil {
-			// Geçersiz ya da süresi geçmiş çerezi temizle: tarayıcı her
-			// istekte ölü bir jeton taşımasın.
+			// Clear an invalid or expired cookie, so the browser stops
+			// carrying a dead token on every request.
 			if errors.Is(err, identity.ErrNotFound) {
 				s.clearSessionCookie(w, r)
 			}
@@ -112,7 +112,7 @@ func (s *Server) withSession(next http.Handler) http.Handler {
 		}
 		access, err := s.identity.LoadAccess(r.Context(), user)
 		if err != nil {
-			s.log.Error("yetki bilgisi yüklenemedi", "user", user.ID, "err", err)
+			s.log.Error("could not load authorization data", "user", user.ID, "err", err)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -122,29 +122,29 @@ func (s *Server) withSession(next http.Handler) http.Handler {
 	})
 }
 
-// requireAuth, oturum şartı koyar.
+// requireAuth demands a session.
 func requireAuth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if accessFrom(r) == nil {
-			writeErrorCode(w, http.StatusUnauthorized, "oturum açmanız gerekiyor", "unauthenticated")
+			writeErrorCode(w, http.StatusUnauthorized, "you need to sign in", "unauthenticated")
 			return
 		}
 		h(w, r)
 	}
 }
 
-// requirePermission, oturumun yanında belirli bir yetki de ister.
+// requirePermission demands a specific permission alongside the session.
 func requirePermission(p identity.Permission, h http.HandlerFunc) http.HandlerFunc {
 	return requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		if !accessFrom(r).Can(p) {
-			writeErrorCode(w, http.StatusForbidden, "bu işlem için yetkiniz yok", "forbidden")
+			writeErrorCode(w, http.StatusForbidden, "you do not have permission for this", "forbidden")
 			return
 		}
 		h(w, r)
 	})
 }
 
-// --- uçlar ---
+// --- endpoints ---
 
 type loginRequest struct {
 	Email    string `json:"email"`
@@ -161,7 +161,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	key := clientIP(r) + "|" + strings.ToLower(strings.TrimSpace(req.Email))
 	if !s.logins.allow(key) {
 		writeErrorCode(w, http.StatusTooManyRequests,
-			"çok fazla başarısız deneme, birkaç dakika sonra tekrar deneyin", "rate_limited")
+			"too many failed attempts, try again in a few minutes", "rate_limited")
 		return
 	}
 
@@ -169,12 +169,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, identity.ErrBadCredential):
-			writeErrorCode(w, http.StatusUnauthorized, "e-posta ya da parola hatalı", "bad_credentials")
+			writeErrorCode(w, http.StatusUnauthorized, "wrong email or password", "bad_credentials")
 		case errors.Is(err, identity.ErrInactive):
-			writeErrorCode(w, http.StatusForbidden, "hesabınız pasif durumda", "inactive")
+			writeErrorCode(w, http.StatusForbidden, "your account is inactive", "inactive")
 		default:
-			s.log.Error("kimlik doğrulama hatası", "err", err)
-			writeError(w, http.StatusInternalServerError, errors.New("giriş yapılamadı"))
+			s.log.Error("authentication error", "err", err)
+			writeError(w, http.StatusInternalServerError, errors.New("could not sign in"))
 		}
 		return
 	}
@@ -200,14 +200,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.log.Info("giriş yapıldı", "user", user.Email, "ip", clientIP(r))
+	s.log.Info("signed in", "user", user.Email, "ip", clientIP(r))
 	writeJSON(w, meResponse(access))
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token, ok := r.Context().Value(ctxToken).(string); ok {
 		if err := s.identity.DeleteSession(r.Context(), token); err != nil {
-			s.log.Warn("oturum silinemedi", "err", err)
+			s.log.Warn("could not delete the session", "err", err)
 		}
 	}
 	s.clearSessionCookie(w, r)
@@ -217,13 +217,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	access := accessFrom(r)
 	if access == nil {
-		writeErrorCode(w, http.StatusUnauthorized, "oturum açmanız gerekiyor", "unauthenticated")
+		writeErrorCode(w, http.StatusUnauthorized, "you need to sign in", "unauthenticated")
 		return
 	}
 	writeJSON(w, meResponse(access))
 }
 
-// handleChangeOwnPassword, kullanıcının kendi parolasını değiştirmesi.
+// handleChangeOwnPassword lets a user change their own password.
 func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Current string `json:"currentPassword"`
@@ -235,20 +235,20 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 	}
 	access := accessFrom(r)
 	if _, err := s.identity.Authenticate(r.Context(), access.User.Email, req.Current); err != nil {
-		writeErrorCode(w, http.StatusUnauthorized, "mevcut parola hatalı", "bad_credentials")
+		writeErrorCode(w, http.StatusUnauthorized, "the current password is wrong", "bad_credentials")
 		return
 	}
 	if err := s.identity.SetPassword(r.Context(), access.User.ID, req.New); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	// SetPassword tüm oturumları kapatır; kullanıcı yeniden giriş yapacak.
+	// SetPassword closes every session; the user will sign in again.
 	s.clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// meResponse, arayüzün ihtiyaç duyduğu her şeyi tek yanıtta toplar:
-// kim olduğu, ne yapabildiği, hangi projelere eriştiği.
+// meResponse gathers everything the UI needs into a single response: who the
+// user is, what they can do, and which projects they reach.
 func meResponse(a *identity.Access) map[string]any {
 	perms := make([]identity.Permission, 0, len(a.Permissions))
 	for p := range a.Permissions {
@@ -275,9 +275,9 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isSecureRequest, çerezin Secure işaretlenip işaretlenmeyeceğini belirler.
-// TLS'i sonlandıran bir ters vekil arkasında r.TLS boştur; bu yüzden
-// X-Forwarded-Proto da dikkate alınır.
+// isSecureRequest decides whether the cookie is marked Secure. Behind a
+// reverse proxy that terminates TLS, r.TLS is nil, so X-Forwarded-Proto is
+// taken into account as well.
 func isSecureRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true

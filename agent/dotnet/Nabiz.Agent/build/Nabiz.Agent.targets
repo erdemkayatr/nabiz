@@ -1,15 +1,15 @@
 <Project>
 
   <!--
-    1) Config dosyasını üret.
+    1) Generate the config file.
 
-    Yalnızca dosya yoksa yazılır. Her derlemede üzerine yazsaydı, kullanıcının
-    girdiği sunucu adresi bir sonraki derlemede silinirdi.
+    Written only when the file is absent. Overwriting on every build would
+    wipe out the server address the user entered.
   -->
   <!--
-    Yalnızca çalıştırılabilir projeler için. Bir kütüphaneye nabiz.json
-    üretmek anlamsız: agent'ı başlatan da yapılandırmayı okuyan da uygulamanın
-    kendisidir, ona referans veren ara kütüphane değil.
+    Executable projects only. Generating a nabiz.json for a library is
+    meaningless: what starts the agent and reads the configuration is the
+    application itself, not an intermediate library that references it.
   -->
   <Target Name="NabizCreateConfig"
           BeforeTargets="AssignTargetPaths;BeforeBuild"
@@ -19,14 +19,14 @@
     <Copy SourceFiles="$(MSBuildThisFileDirectory)nabiz.template.json"
           DestinationFiles="$(MSBuildProjectDirectory)/$(NabizConfigFile)" />
     <Message Importance="high"
-             Text="nabiz: $(NabizConfigFile) oluşturuldu. Sunucu adresini 'endpoint' alanına yazın." />
+             Text="nabiz: created $(NabizConfigFile). Put your server address in the 'endpoint' field." />
   </Target>
 
   <!--
-    2) Config'i çıktı dizinine kopyala.
+    2) Copy the config to the output directory.
 
-    AssignTargetPaths'ten önce ItemGroup'a eklenmesi gerekiyor; sonra
-    eklenirse derleme çıktısına dahil edilmez.
+    It has to go into the ItemGroup before AssignTargetPaths; added later, it
+    never makes it into the build output.
   -->
   <Target Name="NabizIncludeConfig"
           BeforeTargets="AssignTargetPaths"
@@ -34,7 +34,7 @@
           Condition="('$(OutputType)' == 'Exe' OR '$(OutputType)' == 'WinExe')
                      AND Exists('$(MSBuildProjectDirectory)/$(NabizConfigFile)')">
     <ItemGroup>
-      <!-- Kullanıcı dosyayı zaten eklediyse ikinci kez ekleme. -->
+      <!-- Do not add it twice if the user already included the file. -->
       <None Include="$(MSBuildProjectDirectory)/$(NabizConfigFile)"
             Condition="'@(None)' == '' OR !$([System.String]::Copy('%(None.Identity)').EndsWith('$(NabizConfigFile)'))">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -44,11 +44,12 @@
   </Target>
 
   <!--
-    3) Otomatik başlatmayı enjekte et.
+    3) Inject automatic startup.
 
-    [ModuleInitializer] tüketici projenin derlemesine girmek zorunda: yalnızca
-    paketin içinde dursaydı, uygulama paketin hiçbir tipine dokunmadığı için
-    assembly hiç yüklenmez ve initializer çalışmazdı.
+    The [ModuleInitializer] has to land in the consuming project's own
+    assembly: living only inside the package, it would never run, because an
+    application that touches none of the package's types never loads that
+    assembly.
   -->
   <Target Name="NabizInjectAutoStart"
           BeforeTargets="BeforeCompile;CoreCompile"

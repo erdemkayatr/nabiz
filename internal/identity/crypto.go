@@ -11,25 +11,25 @@ import (
 	"io"
 )
 
-// ErrNoSecretKey, şifreleme anahtarı verilmediğinde döner.
-var ErrNoSecretKey = errors.New("NABIZ_SECRET_KEY tanımlı değil: tanılama jetonu saklanamaz")
+// ErrNoSecretKey is returned when no encryption key was supplied.
+var ErrNoSecretKey = errors.New("NABIZ_SECRET_KEY is not set: diagnostics tokens cannot be stored")
 
-// Sealer, uygulamaların tanılama jetonlarını şifreler.
+// Sealer encrypts the applications' diagnostics tokens.
 //
-// Bu jetonlar başka sistemlerin süreç belleğini almaya yarıyor. Veritabanı
-// bir yedekten, bir loga düşen sorgudan ya da yanlış bir izinden sızarsa,
-// jetonların düz metin durması kabul edilemez.
+// These tokens are what let someone take another system's process memory. If
+// the database leaks through a backup, a query that ends up in a log, or a
+// wrong permission, having them sitting in plain text is not acceptable.
 type Sealer struct {
 	aead cipher.AEAD
 }
 
-// NewSealer, anahtar dizesinden şifreleyici kurar. Anahtar boşsa nil döner:
-// çağıran, jeton saklamayı reddetmelidir.
+// NewSealer builds an encrypter from a key string. It returns nil when the key
+// is empty: the caller must then refuse to store tokens.
 func NewSealer(key string) (*Sealer, error) {
 	if key == "" {
 		return nil, ErrNoSecretKey
 	}
-	// Anahtar serbest metin olabilir; sabit uzunluğa indiriyoruz.
+	// The key can be free text; it is reduced to a fixed length.
 	sum := sha256.Sum256([]byte(key))
 	block, err := aes.NewCipher(sum[:])
 	if err != nil {
@@ -42,7 +42,7 @@ func NewSealer(key string) (*Sealer, error) {
 	return &Sealer{aead: aead}, nil
 }
 
-// Seal, düz metni şifreler ve base64 döndürür.
+// Seal encrypts plain text and returns base64.
 func (s *Sealer) Seal(plaintext string) (string, error) {
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -52,20 +52,20 @@ func (s *Sealer) Seal(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// Open, şifreli metni çözer.
+// Open decrypts the ciphertext.
 func (s *Sealer) Open(encoded string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", fmt.Errorf("jeton çözümlenemedi: %w", err)
+		return "", fmt.Errorf("could not decode the token: %w", err)
 	}
 	if len(raw) < s.aead.NonceSize() {
-		return "", errors.New("şifreli jeton geçersiz")
+		return "", errors.New("the encrypted token is invalid")
 	}
 	nonce, ciphertext := raw[:s.aead.NonceSize()], raw[s.aead.NonceSize():]
 	plain, err := s.aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		// Anahtar değiştiyse burası patlar; mesaj bunu açıkça söylemeli.
-		return "", fmt.Errorf("jeton açılamadı (NABIZ_SECRET_KEY değişmiş olabilir): %w", err)
+		// This is where a changed key blows up; the message has to say so.
+		return "", fmt.Errorf("could not open the token (NABIZ_SECRET_KEY may have changed): %w", err)
 	}
 	return string(plain), nil
 }

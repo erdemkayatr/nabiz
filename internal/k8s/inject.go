@@ -1,10 +1,10 @@
-// Package k8s, .NET enstrümantasyonunu pod'lara otomatik enjekte eden
-// admission webhook'unu barındırır.
+// Package k8s holds the admission webhook that automatically injects .NET
+// instrumentation into pods.
 //
-// Enjeksiyon, uygulama imajına dokunmaz: enstrümantasyon paylaşımlı bir
-// emptyDir'e init container ile kopyalanır, uygulama container'ına da yalnızca
-// ortam değişkeni eklenir. Geri almak, annotation'ı silip pod'u yeniden
-// başlatmaktan ibarettir.
+// Injection never touches the application image: the instrumentation is copied
+// into a shared emptyDir by an init container, and only environment variables
+// are added to the application container. Undoing it is deleting the annotation
+// and restarting the pod.
 package k8s
 
 import (
@@ -15,20 +15,21 @@ import (
 )
 
 const (
-	// AnnotationInject, pod'a .NET enstrümantasyonu enjekte edilmesini ister.
+	// AnnotationInject asks for .NET instrumentation to be injected into the pod.
 	AnnotationInject = "nabiz.io/inject-dotnet"
-	// AnnotationServiceName, OTEL_SERVICE_NAME'i elle belirler. Yoksa
-	// workload adından türetilir.
+	// AnnotationServiceName sets OTEL_SERVICE_NAME explicitly. Without it the
+	// name is derived from the workload.
 	AnnotationServiceName = "nabiz.io/service-name"
-	// AnnotationContainer, birden fazla container varsa hangisinin
-	// enstrümante edileceğini söyler.
+	// AnnotationContainer says which container to instrument when the pod has
+	// more than one.
 	AnnotationContainer = "nabiz.io/container"
-	// AnnotationSampleRatio, agent tarafı örnekleme oranı ("0.1" gibi).
+	// AnnotationSampleRatio is the agent-side sampling ratio, e.g. "0.1".
 	AnnotationSampleRatio = "nabiz.io/sample-ratio"
-	// AnnotationLibc, uygulama imajı Alpine tabanlıysa "musl" yapılır.
-	// Varsayılan glibc'dir; resmi .NET imajları Debian tabanlı.
+	// AnnotationLibc is set to "musl" when the application image is
+	// Alpine-based. The default is glibc; the official .NET images are
+	// Debian-based.
 	AnnotationLibc = "nabiz.io/libc"
-	// AnnotationInjected, iki kez enjeksiyonu önleyen işaret.
+	// AnnotationInjected is the marker that prevents injecting twice.
 	AnnotationInjected = "nabiz.io/injected"
 
 	volumeName    = "nabiz-dotnet-auto"
@@ -36,19 +37,19 @@ const (
 	initContainer = "nabiz-dotnet-init"
 )
 
-// InjectConfig, webhook'un enjeksiyon davranışı.
+// InjectConfig is the webhook's injection behaviour.
 type InjectConfig struct {
-	// InstrumentationImage, auto-instrumentation dosyalarını taşıyan imaj.
+	// InstrumentationImage is the image carrying the auto-instrumentation files.
 	InstrumentationImage string
-	// CollectorEndpoint, OTLP hedefi (ör. http://nabiz-collector.nabiz:4317).
+	// CollectorEndpoint is the OTLP target, e.g. http://nabiz-collector.nabiz:4317.
 	CollectorEndpoint string
-	// ClusterName, tüm span'lere eklenen k8s.cluster.name.
+	// ClusterName is the k8s.cluster.name added to every span.
 	ClusterName string
-	// DefaultSampleRatio, annotation yoksa kullanılacak oran.
+	// DefaultSampleRatio is the ratio used when the annotation is absent.
 	DefaultSampleRatio string
 }
 
-// ShouldInject, pod'un enjeksiyon isteyip istemediğini söyler.
+// ShouldInject says whether the pod is asking to be injected.
 func ShouldInject(pod *corev1.Pod) bool {
 	if pod.Annotations[AnnotationInjected] == "true" {
 		return false
@@ -60,11 +61,11 @@ func ShouldInject(pod *corev1.Pod) bool {
 	return false
 }
 
-// Inject, pod'u yerinde değiştirir. Hangi container'ın enstrümante edildiğini
-// döndürür.
+// Inject mutates the pod in place and returns the name of the container that
+// was instrumented.
 func Inject(pod *corev1.Pod, cfg InjectConfig) (string, error) {
 	if len(pod.Spec.Containers) == 0 {
-		return "", fmt.Errorf("pod'da container yok")
+		return "", fmt.Errorf("the pod has no containers")
 	}
 
 	idx, err := targetContainer(pod)
@@ -100,7 +101,7 @@ func targetContainer(pod *corev1.Pod) (int, error) {
 			return i, nil
 		}
 	}
-	return 0, fmt.Errorf("annotation'daki container bulunamadı: %s", name)
+	return 0, fmt.Errorf("the container named in the annotation was not found: %s", name)
 }
 
 func addVolume(pod *corev1.Pod) {
@@ -115,10 +116,11 @@ func addVolume(pod *corev1.Pod) {
 	})
 }
 
-// initScript, enstrümantasyonu paylaşımlı birime kopyalar ve doğru mimari
-// dizinine "native" adıyla symlink atar. Mimari, ancak pod'un çalışacağı
-// node'da bilinebildiği için webhook'ta değil burada çözülür; Kubernetes'in
-// $(VAR) ikamesi de node bilgisine erişemez.
+// initScript copies the instrumentation onto the shared volume and symlinks
+// the right architecture directory as "native". The architecture is only known
+// on the node the pod will run on, so it is resolved here rather than in the
+// webhook; Kubernetes' own $(VAR) substitution cannot reach node information
+// either.
 func initScript(pod *corev1.Pod) string {
 	libc := ""
 	if strings.EqualFold(pod.Annotations[AnnotationLibc], "musl") {
@@ -156,12 +158,12 @@ func addInitContainer(pod *corev1.Pod, cfg InjectConfig) {
 	})
 }
 
-// instrumentationEnv, CLR profiler'ı devreye alan ve topoloji için gereken
-// k8s boyutlarını taşıyan ortam değişkenlerini üretir.
+// instrumentationEnv produces the environment variables that enable the CLR
+// profiler and carry the Kubernetes dimensions the topology needs.
 //
-// k8s bilgisi downward API ile pod'un kendisinden alınır; collector sıcak
-// yolda Kubernetes API'sine hiç gitmez. Topolojinin k8s boyutu bu yüzden
-// bedavaya gelir.
+// The Kubernetes data comes from the pod itself through the downward API; the
+// collector never touches the Kubernetes API on the hot path. That is why the
+// topology's Kubernetes dimension is essentially free.
 func instrumentationEnv(pod *corev1.Pod, target *corev1.Container, cfg InjectConfig) []corev1.EnvVar {
 	sampleRatio := pod.Annotations[AnnotationSampleRatio]
 	if sampleRatio == "" {
@@ -179,7 +181,7 @@ func instrumentationEnv(pod *corev1.Pod, target *corev1.Container, cfg InjectCon
 	}
 
 	env := []corev1.EnvVar{
-		// --- downward API: topolojinin k8s boyutları ---
+		// --- downward API: the topology's Kubernetes dimensions ---
 		fieldEnv("NABIZ_K8S_NAMESPACE", "metadata.namespace"),
 		fieldEnv("NABIZ_K8S_POD", "metadata.name"),
 		fieldEnv("NABIZ_K8S_NODE", "spec.nodeName"),
@@ -193,19 +195,20 @@ func instrumentationEnv(pod *corev1.Pod, target *corev1.Container, cfg InjectCon
 		{Name: "DOTNET_STARTUP_HOOKS", Value: mountPath + "/net/OpenTelemetry.AutoInstrumentation.StartupHook.dll"},
 		{Name: "OTEL_DOTNET_AUTO_HOME", Value: mountPath},
 
-		// --- dışa aktarım ---
+		// --- export ---
 		{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: cfg.CollectorEndpoint},
 		{Name: "OTEL_EXPORTER_OTLP_PROTOCOL", Value: "grpc"},
 		{Name: "OTEL_METRICS_EXPORTER", Value: "none"},
 		{Name: "OTEL_LOGS_EXPORTER", Value: "none"},
 
-		// --- performans ---
-		// Örnekleme kararı agent'ta verilir: düşürülen span hiç serileştirilmez,
-		// ağa çıkmaz, collector'ı meşgul etmez. parentbased olması, bir trace'in
-		// tüm servislerde aynı kararı almasını garanti eder.
+		// --- performance ---
+		// The sampling decision is made in the agent: a dropped span is never
+		// serialized, never reaches the network and never occupies the
+		// collector. parentbased guarantees that a trace gets the same decision
+		// in every service.
 		{Name: "OTEL_TRACES_SAMPLER", Value: "parentbased_traceidratio"},
 		{Name: "OTEL_TRACES_SAMPLER_ARG", Value: sampleRatio},
-		// Batch exporter: istek yolunda ağ çağrısı yok.
+		// Batch exporter: no network call on the request path.
 		{Name: "OTEL_BSP_SCHEDULE_DELAY", Value: "2000"},
 		{Name: "OTEL_BSP_MAX_QUEUE_SIZE", Value: "8192"},
 		{Name: "OTEL_BSP_MAX_EXPORT_BATCH_SIZE", Value: "1024"},
@@ -216,7 +219,7 @@ func instrumentationEnv(pod *corev1.Pod, target *corev1.Container, cfg InjectCon
 	return env
 }
 
-// serviceName, servis adını annotation'dan, yoksa pod adından türetir.
+// serviceName derives the service name from the annotation, or from the pod.
 func serviceName(pod *corev1.Pod, target *corev1.Container) string {
 	if v := pod.Annotations[AnnotationServiceName]; v != "" {
 		return v
@@ -242,8 +245,8 @@ func fieldEnv(name, path string) corev1.EnvVar {
 	}
 }
 
-// mergeEnv, var olan değişkenlerin üzerine yazmaz: kullanıcının kendi
-// ayarı her zaman kazanır.
+// mergeEnv never overwrites an existing variable: the user's own setting
+// always wins.
 func mergeEnv(existing, added []corev1.EnvVar) []corev1.EnvVar {
 	present := make(map[string]struct{}, len(existing))
 	for _, e := range existing {

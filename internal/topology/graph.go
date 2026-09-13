@@ -1,11 +1,12 @@
-// Package topology, servis/k8s topolojisini gelen isteklerden (span'lerden)
-// çıkarır. Ayrı bir keşif mekanizması, sidecar ya da ağ taraması yoktur:
-// topoloji, trace'lerin kendisinden türer.
+// Package topology derives the service and Kubernetes topology from the
+// incoming requests (spans) themselves. There is no separate discovery
+// mechanism, sidecar or network scan: the topology comes out of the traces.
 //
-// Yöntem: bir SERVER span'inin ebeveyni, çağıran serviste üretilmiş bir CLIENT
-// span'idir. İkisini span_id üzerinden eşleştirince kenarın iki ucu da elde
-// edilir. Eşleşmeyen CLIENT span'leri ise dış bağımlılıktır (veritabanı, kuyruk,
-// enstrümante olmayan servis); onları peer bilgisinden türetiriz.
+// The method: the parent of a SERVER span is a CLIENT span produced in the
+// calling service. Pair the two on span_id and you have both ends of the edge.
+// CLIENT spans that never find a pair are external dependencies (a database, a
+// queue, an uninstrumented service); those are derived from the peer
+// attributes.
 package topology
 
 import (
@@ -20,15 +21,15 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/model"
 )
 
-// ConnType, kenarın türü.
+// ConnType is the type of an edge.
 type ConnType uint8
 
 const (
-	ConnService   ConnType = iota // servis -> servis
-	ConnDatabase                  // servis -> veritabanı
-	ConnMessaging                 // servis -> kuyruk/topic
-	ConnExternal                  // servis -> enstrümante olmayan dış uç
-	ConnEntry                     // dış dünya -> servis (giriş noktası)
+	ConnService   ConnType = iota // service -> service
+	ConnDatabase                  // service -> database
+	ConnMessaging                 // service -> queue/topic
+	ConnExternal                  // service -> uninstrumented external endpoint
+	ConnEntry                     // outside world -> service (entry point)
 )
 
 func (c ConnType) String() string {
@@ -46,15 +47,15 @@ func (c ConnType) String() string {
 	}
 }
 
-// LatencyBounds, kenar histogramının üst sınırları (milisaniye).
-// Son kova (+Inf) dizide yer alır ama burada listelenmez.
+// LatencyBounds are the upper bounds of the edge histogram, in milliseconds.
+// The last bucket (+Inf) exists in the array but is not listed here.
 var LatencyBounds = [...]float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
 
-// BucketCount, histogramdaki kova sayısı (+Inf dahil).
+// BucketCount is the number of histogram buckets, including +Inf.
 const BucketCount = len(LatencyBounds) + 1
 
-// EdgeKey, bir kenarın kimliğidir. Map anahtarı olarak kullanıldığı için
-// karşılaştırılabilir olmak zorunda; bu yüzden düz string alanlar.
+// EdgeKey identifies an edge. It is used as a map key, so it has to be
+// comparable — hence the plain string fields.
 type EdgeKey struct {
 	Client          string
 	Server          string
@@ -67,42 +68,42 @@ type EdgeKey struct {
 	ConnType        ConnType
 }
 
-// EdgeSample, bir kenarın bir zaman kovasındaki toplamıdır.
+// EdgeSample is an edge's aggregate within one time bucket.
 type EdgeSample struct {
-	Bucket time.Time // dakikaya yuvarlanmış
+	Bucket time.Time // truncated to the minute
 	Key    EdgeKey
 	Calls  uint64
 	Errors uint64
 
-	// Süreler sunucu tarafı span'den alınır; yoksa istemci tarafından.
+	// Durations come from the server-side span, or the client side if absent.
 	DurationSumNS uint64
 	DurationMaxNS uint64
 	Buckets       [BucketCount]uint64
 }
 
-// EdgeSink, toplanmış kenarları yazan bileşen (ClickHouse).
+// EdgeSink is the component that writes aggregated edges (ClickHouse).
 type EdgeSink interface {
 	WriteEdges(ctx context.Context, edges []EdgeSample) error
 }
 
-// Config, topoloji oluşturucu ayarları.
+// Config holds the topology builder's settings.
 type Config struct {
-	// Shards, eşleştirme tablosundaki kilit parçalanması. 2'nin kuvveti olmalı.
+	// Shards is the lock striping of the pairing table. Must be a power of two.
 	Shards int
-	// PairTTL, bir CLIENT span'inin eşini bekleyeceği süre. Bu sürenin
-	// sonunda eşleşmeyenler dış bağımlılık kabul edilir.
+	// PairTTL is how long a CLIENT span waits for its pair. Anything still
+	// unpaired at the end of it is treated as an external dependency.
 	PairTTL time.Duration
-	// FlushInterval, toplanan kenarların depoya yazılma aralığı.
+	// FlushInterval is how often aggregated edges are written to storage.
 	FlushInterval time.Duration
-	// MaxPendingPerShard, shard başına bekleyen span üst sınırı. Aşılırsa yeni
-	// kayıt alınmaz: bellek, topoloji doğruluğundan önce gelir.
+	// MaxPendingPerShard caps the pending spans per shard. Beyond it nothing
+	// new is recorded: memory comes before topology accuracy.
 	MaxPendingPerShard int
-	// IncludeNodeDimension, kenar anahtarına k8s node'unu da ekler. Node'lar
-	// arası trafiği görmek için açılır; kardinaliteyi node sayısı kadar çarpar.
+	// IncludeNodeDimension adds the Kubernetes node to the edge key. Turn it on
+	// to see node-to-node traffic; it multiplies cardinality by the node count.
 	IncludeNodeDimension bool
 }
 
-// DefaultConfig, makul varsayılanlar.
+// DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
 		Shards:               64,
@@ -113,7 +114,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// Stats, topoloji sayaçları.
+// Stats holds the topology counters.
 type Stats struct {
 	Paired         atomic.Uint64
 	InferredPeers  atomic.Uint64
@@ -123,7 +124,7 @@ type Stats struct {
 	PendingDropped atomic.Uint64
 }
 
-// node, kenarın bir ucundaki servisin kimliği.
+// node identifies the service at one end of an edge.
 type node struct {
 	service   string
 	namespace string
@@ -131,29 +132,29 @@ type node struct {
 	k8sNode   string
 }
 
-// pending, eşleşme bekleyen bir span.
+// pending is a span waiting to be paired.
 type pending struct {
 	side       uint8 // 1 = client, 2 = server
 	n          node
 	durationNS uint64
 	isError    bool
 	connType   ConnType
-	peer       string // istemci tarafı için türetilmiş hedef adı
+	peer       string // the derived target name, for the client side
 }
 
-// shard, iki nesilli (generational) bir bekleyen-span tablosudur.
+// shard is a two-generation table of pending spans.
 //
-// Nesil rotasyonu TTL/2'de bir yapılır: cur -> prev, prev atılır. Böylece
-// kayıtlar TTL/2 ile TTL arasında yaşar, silme maliyeti O(1) olur ve bellek
-// üst sınırı serbest kalır. Atılan nesildeki eşleşmemiş CLIENT span'leri
-// "dış bağımlılık" kenarına dönüştürülür.
+// Generations rotate every TTL/2: cur -> prev, and prev is discarded. Records
+// therefore live between TTL/2 and TTL, eviction costs O(1), and the memory
+// ceiling takes care of itself. Unpaired CLIENT spans in the discarded
+// generation are turned into "external dependency" edges.
 type shard struct {
 	mu   sync.Mutex
 	cur  map[string]pending
 	prev map[string]pending
 }
 
-// Builder, span akışından topoloji üretir. pipeline.Processor'ı karşılar.
+// Builder derives topology from the span stream. It satisfies pipeline.Processor.
 type Builder struct {
 	cfg    Config
 	sink   EdgeSink
@@ -175,12 +176,12 @@ type aggKey struct {
 	key    EdgeKey
 }
 
-// New, topoloji oluşturucuyu kurar.
+// New builds the topology builder.
 func New(cfg Config, sink EdgeSink, log *slog.Logger) *Builder {
 	if cfg.Shards <= 0 {
 		cfg = DefaultConfig()
 	}
-	// Shards'ı 2'nin kuvvetine yuvarla.
+	// Round Shards up to a power of two.
 	n := 1
 	for n < cfg.Shards {
 		n <<= 1
@@ -206,13 +207,13 @@ func New(cfg Config, sink EdgeSink, log *slog.Logger) *Builder {
 	return b
 }
 
-// Name, Processor arayüzü için.
+// Name satisfies the Processor interface.
 func (b *Builder) Name() string { return "topology" }
 
-// Stats, sayaçlara erişim verir.
+// Stats exposes the counters.
 func (b *Builder) Stats() *Stats { return &b.stats }
 
-// Start, rotasyon ve flush döngülerini başlatır.
+// Start launches the rotation and flush loops.
 func (b *Builder) Start(ctx context.Context) {
 	b.wg.Add(1)
 	go func() {
@@ -240,13 +241,13 @@ func (b *Builder) Start(ctx context.Context) {
 	}()
 }
 
-// Stop, döngüleri durdurur ve son flush'ı bekler.
+// Stop halts the loops and waits for the final flush.
 func (b *Builder) Stop() {
 	close(b.stopCh)
 	b.wg.Wait()
 }
 
-// Process, bir batch span'i topolojiye işler.
+// Process folds a batch of spans into the topology.
 func (b *Builder) Process(_ context.Context, spans []*model.Span) error {
 	for _, s := range spans {
 		b.observe(s)
@@ -261,8 +262,8 @@ func (b *Builder) observe(s *model.Span) {
 	case model.KindServer, model.KindConsumer:
 		b.observeServer(s)
 	default:
-		// INTERNAL span'ler topolojiye katkı vermez; RED metrikleri span
-		// tablosundan ayrıca hesaplanır.
+		// INTERNAL spans contribute nothing to the topology; RED metrics are
+		// computed separately from the span table.
 	}
 }
 
@@ -290,8 +291,8 @@ func (b *Builder) observeClient(s *model.Span) {
 	if len(sh.cur) >= b.cfg.MaxPendingPerShard {
 		sh.mu.Unlock()
 		b.stats.PendingDropped.Add(1)
-		// Eşleştirmeye yer yok: kenarı yine de kaybetmeyelim, türetilmiş
-		// hedefle yaz.
+		// No room to pair it: rather than lose the edge, write it with the
+		// derived target.
 		b.emitInferred(p)
 		return
 	}
@@ -301,7 +302,7 @@ func (b *Builder) observeClient(s *model.Span) {
 
 func (b *Builder) observeServer(s *model.Span) {
 	if s.ParentSpanID == "" {
-		// Ebeveynsiz SERVER span'i = sistemin giriş noktası.
+		// A SERVER span with no parent is an entry point into the system.
 		b.stats.EntryPoints.Add(1)
 		b.record(EdgeKey{
 			Client:          "user",
@@ -338,9 +339,10 @@ func (b *Builder) observeServer(s *model.Span) {
 	sh.mu.Unlock()
 }
 
-// emitPair, eşleşmiş istemci/sunucu çiftinden kenar üretir. Gecikme sunucu
-// tarafından alınır: istemcinin gördüğü süre ağ ve kuyruk beklemesini de
-// içerir, servis grafiğinde asıl aranan sunucunun harcadığı süredir.
+// emitPair produces an edge from a matched client/server pair. The latency is
+// taken from the server side: what the client sees includes network and queue
+// wait, whereas what a service graph is actually asking about is the time the
+// server spent.
 func (b *Builder) emitPair(client, server pending) {
 	b.stats.Paired.Add(1)
 	dur := server.durationNS
@@ -360,7 +362,7 @@ func (b *Builder) emitPair(client, server pending) {
 	}, dur, client.isError || server.isError)
 }
 
-// emitInferred, eşleşmemiş bir CLIENT span'ini dış bağımlılık kenarına çevirir.
+// emitInferred turns an unpaired CLIENT span into an external-dependency edge.
 func (b *Builder) emitInferred(p pending) {
 	if p.peer == "" {
 		return
@@ -398,8 +400,8 @@ func (b *Builder) record(key EdgeKey, durationNS uint64, isError bool) {
 	b.aggMu.Unlock()
 }
 
-// rotate, nesil değişimi yapar ve atılan nesildeki eşleşmemiş istemci
-// span'lerini dış bağımlılık kenarına çevirir.
+// rotate advances the generations and turns the unpaired client spans in the
+// discarded generation into external-dependency edges.
 func (b *Builder) rotate() {
 	for _, sh := range b.shards {
 		sh.mu.Lock()
@@ -417,7 +419,7 @@ func (b *Builder) rotate() {
 	}
 }
 
-// flush, toplanmış kenarları depoya yazar.
+// flush writes the aggregated edges to storage.
 func (b *Builder) flush(ctx context.Context) {
 	b.aggMu.Lock()
 	if len(b.agg) == 0 {
@@ -432,7 +434,7 @@ func (b *Builder) flush(ctx context.Context) {
 	b.aggMu.Unlock()
 
 	if err := b.sink.WriteEdges(ctx, out); err != nil {
-		b.log.Error("topoloji kenarları yazılamadı", "edges", len(out), "err", err)
+		b.log.Error("could not write topology edges", "edges", len(out), "err", err)
 		return
 	}
 	b.stats.EdgesWritten.Add(uint64(len(out)))
@@ -450,7 +452,7 @@ func (b *Builder) nodeDim(n string) string {
 	return n
 }
 
-// take, anahtarı iki nesilden birinde bulup siler.
+// take finds the key in either generation and removes it.
 func (s *shard) take(key string) (pending, bool) {
 	if p, ok := s.cur[key]; ok {
 		delete(s.cur, key)
@@ -483,8 +485,8 @@ func connTypeOf(s *model.Span) ConnType {
 	}
 }
 
-// peerNameOf, eşleşmemiş bir istemci span'inin hedefine isim verir.
-// Sıra önemli: en açıklayıcı isim kazanır.
+// peerNameOf names the target of an unpaired client span.
+// Order matters: the most descriptive name wins.
 func peerNameOf(s *model.Span) string {
 	if s.DBSystem != "" {
 		name := s.DBName

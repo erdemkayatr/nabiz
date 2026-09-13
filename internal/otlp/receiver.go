@@ -1,9 +1,9 @@
-// Package otlp, OTLP alıcılarını (gRPC ve HTTP) barındırır.
+// Package otlp holds the OTLP receivers, both gRPC and HTTP.
 //
-// Tasarım kuralı: alıcı asla göndereni bloke etmez. Kuyruk dolduğunda span
-// düşürülür ve sayaç artar; uygulamanın içindeki agent bizim yüzümüzden
-// yavaşlamaz. "Performansa etkisi olmasın" gereksiniminin sunucu tarafındaki
-// karşılığı budur.
+// The design rule: the receiver never blocks the sender. When the queue is
+// full, spans are dropped and a counter goes up; the agent inside the
+// application never slows down because of us. This is the server-side half of
+// the "must not affect performance" requirement.
 package otlp
 
 import (
@@ -21,20 +21,20 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/model"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
-	// gRPC tarafında gzip'li export'ları çözebilmek için codec'i kaydeder.
+	// Registers the codec so gzipped exports can be decoded on the gRPC side.
 	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-// Consumer, alıcıdan çıkan span'leri tüketen bileşendir (pipeline).
-// Accept bloke etmemeli; kabul edilmeyen span sayısını döndürür.
+// Consumer is the component that consumes spans leaving the receiver (the pipeline).
+// Accept must not block; it returns the number of spans not accepted.
 type Consumer interface {
 	Accept(spans []*model.Span) (dropped int)
 }
 
-// Stats, alıcının sayaçlarıdır; /metrics ve loglarda kullanılır.
+// Stats holds the receiver's counters, used by /metrics and the logs.
 type Stats struct {
 	SpansReceived atomic.Uint64
 	SpansDropped  atomic.Uint64
@@ -42,7 +42,7 @@ type Stats struct {
 	Errors        atomic.Uint64
 }
 
-// Receiver, gRPC ve HTTP OTLP uçlarını birlikte yönetir.
+// Receiver manages the gRPC and HTTP OTLP endpoints together.
 type Receiver struct {
 	consumer Consumer
 	log      *slog.Logger
@@ -52,14 +52,14 @@ type Receiver struct {
 	httpServer *http.Server
 }
 
-// Config, alıcı ayarlarıdır.
+// Config holds the receiver settings.
 type Config struct {
 	GRPCAddr       string
 	HTTPAddr       string
 	MaxRecvMsgSize int
 }
 
-// New, alıcıyı kurar ama dinlemeye başlamaz.
+// New builds the receiver but does not start listening.
 func New(cfg Config, consumer Consumer, log *slog.Logger) *Receiver {
 	if cfg.MaxRecvMsgSize <= 0 {
 		cfg.MaxRecvMsgSize = 16 << 20 // 16 MiB
@@ -87,10 +87,10 @@ func New(cfg Config, consumer Consumer, log *slog.Logger) *Receiver {
 	return r
 }
 
-// Stats, sayaçlara erişim verir.
+// Stats exposes the counters.
 func (r *Receiver) Stats() *Stats { return &r.stats }
 
-// Serve, iki dinleyiciyi de açar ve ctx iptal edilene kadar çalışır.
+// Serve opens both listeners and runs until ctx is cancelled.
 func (r *Receiver) Serve(ctx context.Context, cfg Config) error {
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -128,7 +128,7 @@ func (r *Receiver) shutdown() {
 	_ = r.httpServer.Shutdown(ctx)
 }
 
-// consume, ortak giriş noktasıdır: çevir, tüket, sayaçları güncelle.
+// consume is the shared entry point: convert, consume, update the counters.
 func (r *Receiver) consume(req *coltracepb.ExportTraceServiceRequest) (received, dropped int) {
 	spans := ConvertTraces(req.ResourceSpans)
 	if len(spans) == 0 {
@@ -143,8 +143,8 @@ func (r *Receiver) consume(req *coltracepb.ExportTraceServiceRequest) (received,
 }
 
 // defaultStreamWorkers, gRPC stream'lerini sabit bir goroutine havuzuna
-// bağlar. Havuz olmadan her stream yeni goroutine açar; yüzlerce pod'lu bir
-// kümede bu, stack büyümesi ve scheduler baskısı demek.
+// pool. Without one, every stream spawns a new goroutine; on a cluster with
+// hundreds of pods that means stack growth and scheduler pressure.
 func defaultStreamWorkers() int {
 	n := runtime.GOMAXPROCS(0) * 2
 	if n < 4 {
@@ -156,8 +156,8 @@ func defaultStreamWorkers() int {
 	return n
 }
 
-// keepalivePolicy, agresif ping atan agent'ların bağlantısını koparmamak için
-// gevşek tutulur; agent tarafında yeniden bağlanma maliyeti bizde değil onda.
+// keepalivePolicy is kept loose so connections from agents that ping
+// aggressively are not dropped; the cost of reconnecting is theirs, not ours.
 func keepalivePolicy() keepalive.EnforcementPolicy {
 	return keepalive.EnforcementPolicy{
 		MinTime:             10 * time.Second,
@@ -179,7 +179,7 @@ func (t *traceService) Export(_ context.Context, req *coltracepb.ExportTraceServ
 	if dropped > 0 {
 		resp.PartialSuccess = &coltracepb.ExportTracePartialSuccess{
 			RejectedSpans: int64(dropped),
-			ErrorMessage:  "nabiz: kuyruk dolu, span düşürüldü",
+			ErrorMessage:  "nabiz: queue full, spans dropped",
 		}
 	}
 	return resp, nil
@@ -196,7 +196,7 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 	if req.Header.Get("Content-Encoding") == "gzip" {
 		gz, err := gzip.NewReader(body)
 		if err != nil {
-			r.httpError(w, http.StatusBadRequest, "gzip çözülemedi")
+			r.httpError(w, http.StatusBadRequest, "could not decompress gzip")
 			return
 		}
 		defer gz.Close()
@@ -205,7 +205,7 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 
 	raw, err := io.ReadAll(body)
 	if err != nil {
-		r.httpError(w, http.StatusBadRequest, "gövde okunamadı")
+		r.httpError(w, http.StatusBadRequest, "could not read the body")
 		return
 	}
 
@@ -219,7 +219,7 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 		err = proto.Unmarshal(raw, &otlpReq)
 	}
 	if err != nil {
-		r.httpError(w, http.StatusBadRequest, "OTLP gövdesi çözümlenemedi")
+		r.httpError(w, http.StatusBadRequest, "could not decode the OTLP body")
 		return
 	}
 
@@ -229,7 +229,7 @@ func (r *Receiver) handleHTTPTraces(w http.ResponseWriter, req *http.Request) {
 	if dropped > 0 {
 		resp.PartialSuccess = &coltracepb.ExportTracePartialSuccess{
 			RejectedSpans: int64(dropped),
-			ErrorMessage:  "nabiz: kuyruk dolu, span düşürüldü",
+			ErrorMessage:  "nabiz: queue full, spans dropped",
 		}
 	}
 

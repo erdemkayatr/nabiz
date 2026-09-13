@@ -10,15 +10,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrTokenMismatch, agent'ın sunduğu jeton projenin jetonuyla uyuşmuyor.
-var ErrTokenMismatch = errors.New("tanılama jetonu eşleşmiyor")
+// ErrTokenMismatch means the token the agent presented does not match the
+// project's token.
+var ErrTokenMismatch = errors.New("diagnostics token does not match")
 
-// SetSealer, jeton şifreleyicisini bağlar. Verilmezse jeton saklanamaz.
+// SetSealer attaches the token encrypter. Without one, tokens cannot be stored.
 func (s *Store) SetSealer(sealer *Sealer) { s.sealer = sealer }
 
-// --- proje tanılama jetonu ---
+// --- project diagnostics token ---
 
-// SetProjectDiagnosticsToken, projenin uygulamalarındaki jetonu kaydeder.
+// SetProjectDiagnosticsToken stores the token used by the project's applications.
 func (s *Store) SetProjectDiagnosticsToken(ctx context.Context, projectID, token, by string) error {
 	if s.sealer == nil {
 		return ErrNoSecretKey
@@ -40,8 +41,8 @@ func (s *Store) SetProjectDiagnosticsToken(ctx context.Context, projectID, token
 	return err
 }
 
-// HasProjectDiagnosticsToken, jeton tanımlı mı. Jetonun kendisi asla
-// arayüze dönmez; yalnızca varlığı bilinir.
+// HasProjectDiagnosticsToken reports whether a token is set. The token itself
+// never travels back to the UI; only its existence is exposed.
 func (s *Store) HasProjectDiagnosticsToken(ctx context.Context, projectID string) (bool, error) {
 	var count int
 	err := s.pool.QueryRow(ctx,
@@ -49,8 +50,9 @@ func (s *Store) HasProjectDiagnosticsToken(ctx context.Context, projectID string
 	return count > 0, err
 }
 
-// projectTokenFor, servis adına atanmış projelerin jetonlarını çözer.
-// Bir servis birden fazla projede olabileceği için birden fazla jeton dönebilir.
+// projectTokenFor decrypts the tokens of the projects a service name is
+// assigned to. A service can belong to more than one project, so more than one
+// token can come back.
 func (s *Store) projectTokenFor(ctx context.Context, serviceName string) ([]tokenMatch, error) {
 	if s.sealer == nil {
 		return nil, ErrNoSecretKey
@@ -74,7 +76,7 @@ func (s *Store) projectTokenFor(ctx context.Context, serviceName string) ([]toke
 		}
 		token, err := s.sealer.Open(sealed)
 		if err != nil {
-			// Anahtar değişmişse diğer projeleri denemeye devam et.
+			// If the key has changed, carry on and try the other projects.
 			continue
 		}
 		out = append(out, tokenMatch{ProjectID: projectID, Token: token})
@@ -87,13 +89,14 @@ type tokenMatch struct {
 	Token     string
 }
 
-// --- agent kaydı ---
+// --- agent registration ---
 
-// RegisterAgent, bir uygulama örneğinin kendini tanıtmasını işler.
+// RegisterAgent handles an application instance announcing itself.
 //
-// Kayıt, servisin projesine tanımlı jetonla doğrulanır. Doğrulanmayan kayıt
-// da saklanır (operatör görebilsin) ama dump tetiklenemez: aksi halde sahte
-// bir kayıt, nabiz'i jetonu saldırganın adresine göndermeye ikna edebilirdi.
+// The registration is verified against the token set on the service's project.
+// An unverified registration is still stored, so the operator can see it, but
+// dumps cannot be triggered against it: otherwise a forged registration could
+// talk nabiz into sending the token to an attacker's address.
 func (s *Store) RegisterAgent(ctx context.Context, in AgentInstance, presentedToken string) (*AgentInstance, error) {
 	verified := false
 	projectID := ""
@@ -145,8 +148,8 @@ func (s *Store) RegisterAgent(ctx context.Context, in AgentInstance, presentedTo
 	return &out, nil
 }
 
-// ListAgents, son görülme sırasına göre örnekleri verir. maxAge'den eski
-// olanlar elenir: ölü pod'ları listelemek operatörü yanıltır.
+// ListAgents returns instances ordered by when they were last seen. Anything
+// older than maxAge is dropped: listing dead pods misleads the operator.
 func (s *Store) ListAgents(ctx context.Context, services []string, maxAge time.Duration) ([]AgentInstance, error) {
 	query := `
 		SELECT id, service_name, instance_id, hostname, k8s_pod, k8s_namespace, pid,
@@ -182,7 +185,7 @@ func (s *Store) ListAgents(ctx context.Context, services []string, maxAge time.D
 	return out, rows.Err()
 }
 
-// GetAgent, tek bir örneği ve tetikleme için gereken jetonu verir.
+// GetAgent returns a single instance along with the token needed to trigger it.
 func (s *Store) GetAgent(ctx context.Context, id string) (*AgentInstance, string, error) {
 	var a AgentInstance
 	err := s.pool.QueryRow(ctx, `
@@ -215,9 +218,9 @@ func (s *Store) GetAgent(ctx context.Context, id string) (*AgentInstance, string
 	return &a, "", ErrTokenMismatch
 }
 
-// --- dump kayıtları ---
+// --- dump records ---
 
-// CreateArtifact, bir dump kaydı açar.
+// CreateArtifact opens a dump record.
 func (s *Store) CreateArtifact(ctx context.Context, instanceID, serviceName, kind, by string) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `
@@ -227,7 +230,7 @@ func (s *Store) CreateArtifact(ctx context.Context, instanceID, serviceName, kin
 	return id, err
 }
 
-// CompleteArtifact, kaydı tamamlanmış olarak işaretler.
+// CompleteArtifact marks the record as finished.
 func (s *Store) CompleteArtifact(ctx context.Context, id, filename string, bytes int64) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE dump_artifacts SET filename = $2, bytes = $3, status = 'ready' WHERE id = $1`,
@@ -235,14 +238,14 @@ func (s *Store) CompleteArtifact(ctx context.Context, id, filename string, bytes
 	return err
 }
 
-// FailArtifact, kaydı hatalı olarak işaretler.
+// FailArtifact marks the record as failed.
 func (s *Store) FailArtifact(ctx context.Context, id, message string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE dump_artifacts SET status = 'failed', error = $2 WHERE id = $1`, id, truncate(message, 500))
 	return err
 }
 
-// ListArtifacts, kaydedilmiş dump'ları verir.
+// ListArtifacts returns the stored dumps.
 func (s *Store) ListArtifacts(ctx context.Context, services []string, limit int) ([]DumpArtifact, error) {
 	query := `
 		SELECT id, COALESCE(instance_id::text, ''), service_name, kind, filename,
@@ -264,8 +267,8 @@ func (s *Store) ListArtifacts(ctx context.Context, services []string, limit int)
 	out := []DumpArtifact{}
 	for rows.Next() {
 		var a DumpArtifact
-		// Sıra SELECT ile birebir aynı olmak zorunda; pgx tipleri any aldığı
-		// için derleyici bu hatayı yakalamaz.
+		// The order has to match the SELECT exactly; pgx takes any for these,
+		// so the compiler cannot catch a mismatch.
 		if err := rows.Scan(&a.ID, &a.InstanceID, &a.ServiceName, &a.Kind, &a.Filename,
 			&a.Bytes, &a.Status, &a.Error, &a.CreatedBy, &a.CreatedAt); err != nil {
 			return nil, err
@@ -275,7 +278,7 @@ func (s *Store) ListArtifacts(ctx context.Context, services []string, limit int)
 	return out, rows.Err()
 }
 
-// GetArtifact, tek kaydı verir.
+// GetArtifact returns a single record.
 func (s *Store) GetArtifact(ctx context.Context, id string) (*DumpArtifact, error) {
 	var a DumpArtifact
 	err := s.pool.QueryRow(ctx, `
@@ -290,15 +293,15 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*DumpArtifact, erro
 	return &a, err
 }
 
-// CancelArtifact, kaydı kullanıcının durdurduğu şeklinde işaretler. Yalnızca
-// hâlâ bekleyen bir kayıt durdurulabilir: dosya diske inmişse iş bitmiştir.
+// CancelArtifact marks the record as stopped by the user. Only a record that
+// is still pending can be stopped: once the file has landed, the job is done.
 func (s *Store) CancelArtifact(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE dump_artifacts SET status = 'cancelled', error = '' WHERE id = $1 AND status = 'pending'`, id)
 	return err
 }
 
-// DeleteArtifact, kaydı siler.
+// DeleteArtifact deletes the record.
 func (s *Store) DeleteArtifact(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM dump_artifacts WHERE id = $1`, id)
 	if err != nil {

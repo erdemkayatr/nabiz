@@ -54,7 +54,7 @@ func TestShouldInjectOnlyWhenAnnotated(t *testing.T) {
 		{map[string]string{AnnotationInject: "TRUE"}, true},
 		{map[string]string{AnnotationInject: "dotnet"}, true},
 		{map[string]string{AnnotationInject: "false"}, false},
-		// Zaten enjekte edilmiş bir pod ikinci kez işlenmemeli.
+		// A pod that has already been injected must not be processed a second time.
 		{map[string]string{AnnotationInject: "true", AnnotationInjected: "true"}, false},
 	}
 	for _, tc := range cases {
@@ -70,24 +70,24 @@ func TestInjectAddsProfilerWithoutTouchingImage(t *testing.T) {
 
 	container, err := Inject(pod, testConfig())
 	if err != nil {
-		t.Fatalf("enjeksiyon hatası: %v", err)
+		t.Fatalf("injection error: %v", err)
 	}
 	if container != "app" {
 		t.Errorf("hedef container = %q, app bekleniyordu", container)
 	}
 	if pod.Spec.Containers[0].Image != originalImage {
-		t.Error("uygulama imajı değiştirildi; enjeksiyon imaja dokunmamalı")
+		t.Error("the application image was changed; injection must not touch the image")
 	}
 
 	env := envOf(pod.Spec.Containers[0])
 	if env["CORECLR_ENABLE_PROFILING"].Value != "1" {
-		t.Error("CLR profiler etkinleştirilmedi")
+		t.Error("the CLR profiler was not enabled")
 	}
 	if !strings.HasPrefix(env["CORECLR_PROFILER_PATH"].Value, mountPath+"/native/") {
-		t.Errorf("profiler yolu symlink üzerinden gitmiyor: %q", env["CORECLR_PROFILER_PATH"].Value)
+		t.Errorf("the profiler path does not go through the symlink: %q", env["CORECLR_PROFILER_PATH"].Value)
 	}
 	if env["OTEL_EXPORTER_OTLP_ENDPOINT"].Value != "http://nabiz-collector.nabiz.svc:4317" {
-		t.Errorf("collector ucu yanlış: %q", env["OTEL_EXPORTER_OTLP_ENDPOINT"].Value)
+		t.Errorf("the collector endpoint is wrong: %q", env["OTEL_EXPORTER_OTLP_ENDPOINT"].Value)
 	}
 }
 
@@ -101,16 +101,16 @@ func TestInjectAddsInitContainerAndSharedVolume(t *testing.T) {
 		t.Fatalf("init container eklenmedi: %+v", pod.Spec.InitContainers)
 	}
 	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].EmptyDir == nil {
-		t.Fatalf("paylaşımlı emptyDir eklenmedi: %+v", pod.Spec.Volumes)
+		t.Fatalf("the shared emptyDir was not added: %+v", pod.Spec.Volumes)
 	}
 	if len(pod.Spec.Containers[0].VolumeMounts) != 1 {
-		t.Fatalf("uygulama container'ına mount eklenmedi")
+		t.Fatalf("no mount was added to the application container")
 	}
 
-	// Mimari, node'da çözülmeli; webhook'ta sabitlenmemeli.
+	// The architecture must be resolved on the node, not fixed in the webhook.
 	script := pod.Spec.InitContainers[0].Command[2]
 	if !strings.Contains(script, "uname -m") {
-		t.Error("init script mimariyi çalışma anında çözmüyor")
+		t.Error("the init script does not resolve the architecture at runtime")
 	}
 	if !strings.Contains(script, "ln -sfn") {
 		t.Error("init script native symlink'i kurmuyor")
@@ -130,7 +130,7 @@ func TestInjectCarriesKubernetesDimensionsViaDownwardAPI(t *testing.T) {
 			t.Fatalf("%s eklenmedi", name)
 		}
 		if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil {
-			t.Errorf("%s downward API yerine sabit değer kullanıyor", name)
+			t.Errorf("%s uses a fixed value instead of the downward API", name)
 		}
 	}
 
@@ -159,10 +159,10 @@ func TestInjectNeverOverridesUserEnv(t *testing.T) {
 	}
 	env := envOf(pod.Spec.Containers[0])
 	if env["OTEL_SERVICE_NAME"].Value != "elle-verilen-ad" {
-		t.Errorf("kullanıcının servis adı ezildi: %q", env["OTEL_SERVICE_NAME"].Value)
+		t.Errorf("the user's service name was overwritten: %q", env["OTEL_SERVICE_NAME"].Value)
 	}
 	if env["OTEL_TRACES_SAMPLER_ARG"].Value != "0.01" {
-		t.Errorf("kullanıcının örnekleme oranı ezildi: %q", env["OTEL_TRACES_SAMPLER_ARG"].Value)
+		t.Errorf("the user's sampling ratio was overwritten: %q", env["OTEL_TRACES_SAMPLER_ARG"].Value)
 	}
 }
 
@@ -172,20 +172,20 @@ func TestServiceNameResolutionOrder(t *testing.T) {
 	pod := newPod(map[string]string{AnnotationInject: "true", AnnotationServiceName: "sepet-servisi"})
 	_, _ = Inject(pod, cfg)
 	if got := envOf(pod.Spec.Containers[0])["OTEL_SERVICE_NAME"].Value; got != "sepet-servisi" {
-		t.Errorf("annotation kazanmadı: %q", got)
+		t.Errorf("the annotation did not win: %q", got)
 	}
 
 	pod = newPod(map[string]string{AnnotationInject: "true"})
 	pod.Labels = map[string]string{"app.kubernetes.io/name": "odeme"}
 	_, _ = Inject(pod, cfg)
 	if got := envOf(pod.Spec.Containers[0])["OTEL_SERVICE_NAME"].Value; got != "odeme" {
-		t.Errorf("standart label kullanılmadı: %q", got)
+		t.Errorf("the standard label was not used: %q", got)
 	}
 
 	pod = newPod(map[string]string{AnnotationInject: "true"})
 	_, _ = Inject(pod, cfg)
 	if got := envOf(pod.Spec.Containers[0])["OTEL_SERVICE_NAME"].Value; got != "api" {
-		t.Errorf("app label'ı kullanılmadı: %q", got)
+		t.Errorf("the app label was not used: %q", got)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestInjectTargetsAnnotatedContainer(t *testing.T) {
 		t.Error("sidecar'a dokunuldu")
 	}
 	if len(pod.Spec.Containers[1].Env) == 0 {
-		t.Error("hedef container enstrümante edilmedi")
+		t.Error("the target container was not instrumented")
 	}
 }
 
@@ -216,7 +216,7 @@ func TestInjectFailsOnUnknownContainer(t *testing.T) {
 		AnnotationContainer: "olmayan",
 	}, "app")
 	if _, err := Inject(pod, testConfig()); err == nil {
-		t.Error("olmayan container için hata bekleniyordu")
+		t.Error("expected an error for a container that does not exist")
 	}
 }
 
@@ -227,7 +227,7 @@ func TestMuslAnnotationSwitchesRuntimeDirectory(t *testing.T) {
 	}
 	script := pod.Spec.InitContainers[0].Command[2]
 	if !strings.Contains(script, "linux-musl-") {
-		t.Errorf("musl dizini seçilmedi: %s", script)
+		t.Errorf("the musl directory was not selected: %s", script)
 	}
 }
 
@@ -238,24 +238,24 @@ func TestInjectIsIdempotent(t *testing.T) {
 	}
 	envCount := len(pod.Spec.Containers[0].Env)
 
-	// ShouldInject ikinci turu engellemeli; yine de Inject çağrılırsa
-	// yapılar çoğalmamalı.
+	// ShouldInject should block the second round; even if Inject is called again,
+	// the structures must not be duplicated.
 	if ShouldInject(pod) {
-		t.Fatal("enjekte edilmiş pod tekrar işlenmek isteniyor")
+		t.Fatal("an already-injected pod is being asked for again")
 	}
 	if _, err := Inject(pod, testConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if len(pod.Spec.InitContainers) != 1 {
-		t.Errorf("init container çoğaldı: %d", len(pod.Spec.InitContainers))
+		t.Errorf("the init container was duplicated: %d", len(pod.Spec.InitContainers))
 	}
 	if len(pod.Spec.Volumes) != 1 {
-		t.Errorf("volume çoğaldı: %d", len(pod.Spec.Volumes))
+		t.Errorf("the volume was duplicated: %d", len(pod.Spec.Volumes))
 	}
 	if len(pod.Spec.Containers[0].VolumeMounts) != 1 {
-		t.Errorf("volume mount çoğaldı: %d", len(pod.Spec.Containers[0].VolumeMounts))
+		t.Errorf("the volume mount was duplicated: %d", len(pod.Spec.Containers[0].VolumeMounts))
 	}
 	if len(pod.Spec.Containers[0].Env) != envCount {
-		t.Errorf("env çoğaldı: %d -> %d", envCount, len(pod.Spec.Containers[0].Env))
+		t.Errorf("env was duplicated: %d -> %d", envCount, len(pod.Spec.Containers[0].Env))
 	}
 }

@@ -13,11 +13,12 @@ import (
 	"time"
 )
 
-// SelfSignedCert, webhook için kendi CA'sını ve sunucu sertifikasını üretir.
+// SelfSignedCert generates the webhook's own CA and server certificate.
 //
-// cert-manager bağımlılığı bilerek yok: operator açılışta sertifikayı üretip
-// MutatingWebhookConfiguration'daki caBundle'ı kendisi günceller. Tek bir
-// manifest dosyasıyla kurulum, ek bir operatör kurmaktan yeğdir.
+// The absence of a cert-manager dependency is deliberate: the operator
+// generates the certificate at startup and updates the caBundle in the
+// MutatingWebhookConfiguration itself. Installing from a single manifest file
+// beats installing another operator first.
 func SelfSignedCert(serviceName, namespace string, validity time.Duration) (tls.Certificate, []byte, error) {
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

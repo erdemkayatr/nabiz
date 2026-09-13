@@ -12,8 +12,8 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/nabiz.xml:/etc/clickhouse-server/config.d/nabiz.xml:ro
     ports:
-      - "8123:8123"   # HTTP arayüzü (ad-hoc SQL için)
-      - "9000:9000"   # native protokol
+      - "8123:8123"   # HTTP interface (for ad-hoc SQL)
+      - "9000:9000"   # native protocol
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     healthcheck:
@@ -22,9 +22,9 @@ services:
       timeout: 3s
       retries: 20
 
-  # nabiz'in denetim düzlemi: kullanıcılar, rol grupları, projeler, oturumlar.
-  # Örnek uygulamanın Postgres'inden kasıtlı olarak ayrı — biri ürünün
-  # verisi, diğeri demo uygulamanın verisi.
+  # nabiz's control plane: users, role groups, projects, sessions.
+  # Deliberately separate from the sample application's Postgres — one holds the
+  # product's data, the other the demo application's.
   nabiz-postgres:
     image: postgres:17-alpine
     environment:
@@ -63,9 +63,9 @@ services:
       clickhouse:
         condition: service_healthy
 
-  # Volume root'a ait olarak oluşuyor; api 10001 kullanıcısıyla koştuğu için
-  # yazamıyor. k8s'te bunu fsGroup hallediyor, compose'da tek seferlik bir
-  # adım gerekiyor.
+  # The volume is created owned by root and the api runs as uid 10001, so it
+  # cannot write. In Kubernetes fsGroup handles this; under compose it takes a
+  # one-off step.
   dump-init:
     image: alpine:3.21
     command: ["sh", "-c", "mkdir -p /dumps && chown -R 10001:10001 /dumps"]
@@ -83,13 +83,14 @@ services:
       NABIZ_CLICKHOUSE_DATABASE: nabiz
       NABIZ_API_ADDR: ":8080"
       NABIZ_POSTGRES_DSN: "postgres://nabiz:nabiz@nabiz-postgres:5432/nabiz?sslmode=disable"
-      # Yerel geliştirme için sabit giriş. Üretimde bu iki değişkeni
-      # vermeyin: nabiz rastgele bir parola üretip loga bir kez yazar.
+      # A fixed login for local development. Do not set these two variables in
+      # production: nabiz generates a random password and logs it once.
       NABIZ_ADMIN_EMAIL: admin@nabiz.local
       NABIZ_ADMIN_PASSWORD: nabiz1234
-      # Uygulamaların tanılama jetonları bu anahtarla şifrelenir. Üretimde
-      # Secret'tan gelmeli; anahtar değişirse saklanmış jetonlar açılamaz.
-      NABIZ_SECRET_KEY: yerel-gelistirme-sifreleme-anahtari
+      # The applications' diagnostics tokens are encrypted with this key. In
+      # production it must come from a Secret; if the key changes, stored
+      # tokens can no longer be decrypted.
+      NABIZ_SECRET_KEY: local-development-encryption-key
       NABIZ_DUMP_DIR: /var/lib/nabiz/dumps
       NABIZ_DUMP_QUOTA_GB: "5"
       NABIZ_DUMP_RETENTION_DAYS: "3"
@@ -107,7 +108,7 @@ services:
       dump-init:
         condition: service_completed_successfully
 
-  # --- örnek .NET uygulaması ---
+  # --- sample .NET application ---
   postgres:
     image: postgres:17-alpine
     environment:
@@ -115,8 +116,8 @@ services:
       POSTGRES_PASSWORD: nabiz
       POSTGRES_DB: orders
     ports:
-      # Yalnızca geliştirme için: compose dışında çalışan örnek uygulamanın
-      # aynı veritabanına bağlanabilmesi gerekiyor.
+      # Development only: the sample application running outside compose needs
+      # to reach the same database.
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nabiz -d orders"]
@@ -160,7 +161,7 @@ services:
       backend:
         condition: service_started
 
-  # --- yük üreteci: topolojide akan trafik olsun diye ---
+  # --- load generator: so there is traffic flowing in the topology ---
   loadgen:
     image: alpine:3.21
     depends_on:
@@ -171,7 +172,7 @@ services:
       - -c
       - |
         apk add --no-cache curl >/dev/null 2>&1
-        echo "yük üretimi başlıyor"
+        echo "starting load generation"
         while true; do
           curl -s -o /dev/null http://frontend:8080/shop
           curl -s -o /dev/null "http://frontend:8080/shop/orders/$$(( (RANDOM % 600) + 1 ))"

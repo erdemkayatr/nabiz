@@ -6,23 +6,23 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/identity"
 )
 
-// scope, bir isteğin görebileceği uygulama kümesidir.
+// scope is the set of applications a request may see.
 //
-// Yetkilendirme tek noktada bu tipe indirgenir; sorgu yazan her uç aynı
-// filtreyi kullanır. "Şu uçta filtreyi eklemeyi unuttuk" hatası, ancak
-// filtrenin tek bir yerden gelmesiyle engellenebilir.
+// Authorization is reduced to this one type, and every endpoint that writes a
+// query uses the same filter. The "we forgot to add the filter on that one
+// endpoint" bug is only prevented by the filter coming from a single place.
 type scope struct {
-	// unrestricted, süper yönetici için doğrudur: filtre uygulanmaz.
+	// unrestricted is true for a super administrator: no filter is applied.
 	unrestricted bool
-	// services, görülebilir servis adları. unrestricted false ve liste boşsa
-	// kullanıcı hiçbir şey göremez.
+	// services are the visible service names. When unrestricted is false and
+	// the list is empty, the user sees nothing at all.
 	services []string
 }
 
-// scopeFor, istekten yetkilendirme kapsamını çıkarır.
+// scopeFor derives the authorization scope from a request.
 //
-// `project` sorgu parametresi verilirse kapsam o projeye daraltılır; verilen
-// proje kullanıcının erişebildikleri arasında değilse boş kapsam döner.
+// If the `project` query parameter is given, the scope narrows to that project;
+// if that project is not among the ones the user can reach, the scope is empty.
 func scopeFor(r *http.Request) scope {
 	access := accessFrom(r)
 	if access == nil {
@@ -42,16 +42,16 @@ func scopeFor(r *http.Request) scope {
 			return scope{services: p.Applications}
 		}
 	}
-	// Erişilemeyen bir proje istendi: hata yerine boş sonuç. Var olmayan ve
-	// erişilemeyen proje aynı yanıtı vermeli, aksi halde uç bir proje
-	// listeleyicisine dönüşür.
+	// An unreachable project was asked for: an empty result rather than an
+	// error. A project that does not exist and one that cannot be reached have
+	// to give the same answer, or the endpoint becomes a project enumerator.
 	return scope{}
 }
 
-// empty, kapsamın hiçbir veri döndürmeyeceğini söyler.
+// empty says the scope will return no data at all.
 func (s scope) empty() bool { return !s.unrestricted && len(s.services) == 0 }
 
-// allows, tek bir servisin kapsamda olup olmadığını söyler.
+// allows says whether a single service is in scope.
 func (s scope) allows(service string) bool {
 	if s.unrestricted {
 		return true
@@ -64,8 +64,8 @@ func (s scope) allows(service string) bool {
 	return false
 }
 
-// filterServiceName, service_name kolonu taşıyan tablolar için WHERE eki
-// üretir (spans, operation_stats).
+// filterServiceName produces the WHERE clause for tables carrying a
+// service_name column (spans, operation_stats).
 func (s scope) filterServiceName(column string) (string, []any) {
 	if s.unrestricted {
 		return "", nil
@@ -73,11 +73,11 @@ func (s scope) filterServiceName(column string) (string, []any) {
 	return " AND " + column + " IN ?", []any{s.services}
 }
 
-// filterTopology, service_edges tablosu için WHERE eki üretir.
+// filterTopology produces the WHERE clause for the service_edges table.
 //
-// Kenarın uçları "namespace/servis" biçiminde olabildiği için son parça
-// alınır. Kenarın bir ucu bile kapsamdaysa gösterilir: bir projenin kendi
-// servisini kimin çağırdığını görmek, o projenin sahibinin hakkı.
+// An edge's ends can be shaped "namespace/service", so the last segment is
+// taken. The edge is shown when either end is in scope: who calls a project's
+// own service is the project owner's business to see.
 func (s scope) filterTopology() (string, []any) {
 	if s.unrestricted {
 		return "", nil
@@ -88,7 +88,7 @@ func (s scope) filterTopology() (string, []any) {
 		[]any{s.services, s.services}
 }
 
-// filterTraces, trace_index tablosu için WHERE eki üretir.
+// filterTraces produces the WHERE clause for the trace_index table.
 func (s scope) filterTraces() (string, []any) {
 	if s.unrestricted {
 		return "", nil
@@ -96,7 +96,7 @@ func (s scope) filterTraces() (string, []any) {
 	return " AND hasAny(services, ?)", []any{s.services}
 }
 
-// permissionFor, uç bazında gereken yetkiyi verir.
+// The permissions required per endpoint.
 var (
 	permTopology = identity.PermTopologyRead
 	permServices = identity.PermServicesRead

@@ -1,17 +1,17 @@
 package clickhouse
 
-// Schema, açılışta idempotent olarak çalıştırılan DDL'lerdir.
+// Schema holds the DDL statements run idempotently at startup.
 //
-// Tasarım notları:
-//   - spans, ORDER BY (service_name, name, timestamp) ile sıralanır; APM
-//     sorgularının neredeyse tamamı "şu serviste şu işlem" ile başlar.
-//   - trace_id ile tek trace çekmek bu sıralamaya uymadığı için ayrı bir
-//     bloom_filter atlama indeksi var; bu, tam tarama yerine granül atlamayı
-//     sağlar.
-//   - service_edges topolojinin kendisidir ve zaten toplanmış gelir; sadece
-//     aynı dakikaya düşen parçaları toplaması için SummingMergeTree.
-//   - RED metrikleri span'lerden materialized view ile türetilir: yazma
-//     yolunda ekstra iş yok, sorgu yolunda tam tarama yok.
+// Design notes:
+//   - spans is ordered by (service_name, name, timestamp); almost every APM
+//     query starts with "this operation in that service".
+//   - pulling one trace by trace_id does not fit that ordering, so there is a
+//     separate bloom_filter skip index; it turns a full scan into granule
+//     skipping.
+//   - service_edges is the topology itself and arrives pre-aggregated; the
+//     SummingMergeTree only has to add up parts landing in the same minute.
+//   - RED metrics are derived from spans by a materialized view: no extra work
+//     on the write path, no full scan on the query path.
 var Schema = []string{
 	`CREATE TABLE IF NOT EXISTS spans (
 		timestamp            DateTime64(9, 'UTC') CODEC(Delta(8), ZSTD(1)),
@@ -133,8 +133,8 @@ var Schema = []string{
 	TTL bucket + INTERVAL {{TTL_DAYS}} DAY DELETE
 	SETTINGS ttl_only_drop_parts = 1`,
 
-	// RED metrikleri yazma anında türet: sorgu anında milyarlarca span'i
-	// taramak yerine dakikalık özet oku.
+	// Derive the RED metrics at write time: read a per-minute summary instead of
+	// scanning billions of spans at query time.
 	`CREATE MATERIALIZED VIEW IF NOT EXISTS operation_stats_mv TO operation_stats AS
 	SELECT
 		toStartOfMinute(timestamp)                              AS bucket,
@@ -151,14 +151,14 @@ var Schema = []string{
 	FROM spans
 	GROUP BY bucket, service_name, operation, kind, k8s_namespace, k8s_workload`,
 
-	// trace_id -> zaman aralığı indeksi. Tek bir trace'i çekerken spans
-	// tablosunda hangi partition'a bakılacağını daraltır.
+	// trace_id -> time range index. It narrows which partition of the spans
+	// table to look at when pulling a single trace.
 	`CREATE TABLE IF NOT EXISTS trace_index (
 		trace_id     String,
 		start        SimpleAggregateFunction(min, DateTime64(9, 'UTC')),
 		end          SimpleAggregateFunction(max, DateTime64(9, 'UTC')),
-		-- any DEĞİL max: AggregatingMergeTree birleşmesinde any, kök span'i
-		-- içermeyen parçadan gelen boş değeri seçebiliyor. max, boş olmayanı
+		    -- max, NOT any: when an AggregatingMergeTree merges, any can pick the
+		    -- empty value from a part that does not contain the root span. max picks
 		-- korur.
 		root_service SimpleAggregateFunction(max, LowCardinality(String)),
 		root_name    SimpleAggregateFunction(max, LowCardinality(String)),
@@ -187,8 +187,8 @@ var Schema = []string{
 	GROUP BY trace_id`,
 }
 
-// InsertSpansSQL, batch insert için hazırlanan deyim. Kolon sırası
-// store.go'daki Append çağrısıyla birebir aynı olmak zorunda.
+// InsertSpansSQL is the statement prepared for the batch insert. The column
+// order has to match the Append call in store.go exactly.
 const InsertSpansSQL = `INSERT INTO spans (
 	timestamp, trace_id, span_id, parent_span_id, trace_state, flags,
 	name, kind, duration_ns, status_code, status_message,
@@ -204,7 +204,7 @@ const InsertSpansSQL = `INSERT INTO spans (
 	links_trace_id, links_span_id
 )`
 
-// InsertEdgesSQL, topoloji kenarları için batch insert.
+// InsertEdgesSQL is the batch insert for topology edges.
 const InsertEdgesSQL = `INSERT INTO service_edges (
 	bucket, client, server,
 	client_namespace, client_workload, server_namespace, server_workload,
@@ -213,6 +213,6 @@ const InsertEdgesSQL = `INSERT INTO service_edges (
 	le_1ms, le_2ms, le_5ms, le_10ms, le_25ms, le_50ms, le_100ms, le_250ms, le_500ms, le_1000ms, le_2500ms, le_5000ms, le_10000ms, le_inf
 )`
 
-// EdgeBucketColumns, gecikme histogramı kolonlarının sırası. topology
-// paketindeki LatencyBounds ile birebir aynı sırada olmak zorunda.
+// EdgeBucketColumns is the order of the latency histogram columns. It has to
+// match LatencyBounds in the topology package exactly.
 var EdgeBucketColumns = []string{"le_1ms", "le_2ms", "le_5ms", "le_10ms", "le_25ms", "le_50ms", "le_100ms", "le_250ms", "le_500ms", "le_1000ms", "le_2500ms", "le_5000ms", "le_10000ms", "le_inf"}

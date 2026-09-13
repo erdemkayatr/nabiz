@@ -8,12 +8,12 @@ using OpenTelemetry.Trace;
 namespace Nabiz.Agent;
 
 /// <summary>
-/// nabiz agent'ının giriş noktası.
+/// The nabiz agent's entry point.
 /// </summary>
 /// <remarks>
-/// Normalde çağırmanız gerekmez: paket, derleme sırasında projenize bir
-/// <c>[ModuleInitializer]</c> enjekte eder ve <see cref="AutoStart"/> uygulama
-/// başlarken kendiliğinden çalışır.
+/// You normally do not need to call this: at build time the package injects a
+/// <c>[ModuleInitializer]</c> into your project, and <see cref="AutoStart"/>
+/// runs by itself when the application starts.
 /// </remarks>
 public static class NabizAgent
 {
@@ -21,18 +21,19 @@ public static class NabizAgent
     private static TracerProvider? _provider;
     private static bool _started;
 
-    /// <summary>Agent çalışıyor mu.</summary>
+    /// <summary>Whether the agent is running.</summary>
     public static bool IsRunning => _provider is not null;
 
-    /// <summary>Etkin yapılandırma; agent başlamadıysa null.</summary>
+    /// <summary>The active configuration; null when the agent has not started.</summary>
     public static NabizOptions? Options { get; private set; }
 
     /// <summary>
-    /// Otomatik başlatma. Üretilen module initializer bunu çağırır.
+    /// Automatic startup. The generated module initializer calls this.
     /// </summary>
     /// <remarks>
-    /// Buradan asla istisna çıkmaz. Bir gözlemlenebilirlik agent'ının izlediği
-    /// uygulamayı açılışta düşürmesi, hiç telemetri toplamamaktan kötüdür.
+    /// No exception ever escapes here. An observability agent taking down the
+    /// application it observes at startup is worse than collecting no telemetry
+    /// at all.
     /// </remarks>
     public static void AutoStart()
     {
@@ -42,12 +43,12 @@ public static class NabizAgent
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[nabiz] agent başlatılamadı, uygulama etkilenmedi: {ex.Message}");
+            Console.Error.WriteLine($"[nabiz] the agent could not start, the application is unaffected: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Agent'ı başlatır. İkinci çağrı yok sayılır.
+    /// Starts the agent. A second call is ignored.
     /// </summary>
     public static void Start(NabizOptions? options = null)
     {
@@ -61,22 +62,22 @@ public static class NabizAgent
 
             if (!opts.Enabled)
             {
-                Log(opts, "yapılandırmada kapalı, başlatılmadı");
+                Log(opts, "disabled in the configuration, not started");
                 return;
             }
 
             var serviceName = ResolveServiceName(opts);
             _provider = Build(opts, serviceName);
 
-            // Süreç kapanırken kuyrukta bekleyen span'ler gönderilsin.
+            // Flush spans still queued when the process shuts down.
             AppDomain.CurrentDomain.ProcessExit += (_, _) => Shutdown();
 
-            Log(opts, $"başladı — servis '{serviceName}', hedef {opts.Endpoint} ({opts.Protocol}), " +
-                      $"örnekleme {opts.SampleRatio:0.###}, config {opts.SourceFile ?? "(bulunamadı, varsayılanlar)"}");
+            Log(opts, $"started — service '{serviceName}', target {opts.Endpoint} ({opts.Protocol}), " +
+                      $"sampling {opts.SampleRatio:0.###}, config {opts.SourceFile ?? "(none found, using defaults)"}");
         }
     }
 
-    /// <summary>Kuyruğu boşaltır ve agent'ı durdurur.</summary>
+    /// <summary>Flushes the queue and stops the agent.</summary>
     public static void Shutdown()
     {
         lock (Gate)
@@ -89,7 +90,7 @@ public static class NabizAgent
             }
             catch
             {
-                // Kapanış sırasındaki hata raporlanacak bir yere zaten gitmiyor.
+                // An error during shutdown has nowhere left to be reported.
             }
             _provider = null;
         }
@@ -103,9 +104,10 @@ public static class NabizAgent
                 serviceNamespace: string.IsNullOrEmpty(opts.ServiceNamespace) ? null : opts.ServiceNamespace,
                 serviceVersion: EntryAssemblyVersion(),
                 autoGenerateServiceInstanceId: true)
-            // OTEL_RESOURCE_ATTRIBUTES'i de okur: nabiz operator'ının downward
-            // API ile enjekte ettiği k8s.pod.name, k8s.namespace.name gibi
-            // alanlar buradan gelir ve topolojinin Kubernetes boyutunu besler.
+            // Also reads OTEL_RESOURCE_ATTRIBUTES: fields such as k8s.pod.name
+            // and k8s.namespace.name, injected by the nabiz operator through the
+            // downward API, arrive here and feed the topology's Kubernetes
+            // dimension.
             .AddEnvironmentVariableDetector();
 
         var attributes = new List<KeyValuePair<string, object>>();
@@ -116,21 +118,22 @@ public static class NabizAgent
 
         var builder = Sdk.CreateTracerProviderBuilder()
             .SetResourceBuilder(resource)
-            // ParentBased olması şart: bir trace'in tüm servislerde aynı
-            // örnekleme kararını alması, yarım kalmış izlerin önüne geçer.
+            // ParentBased is required: a trace getting the same sampling
+            // decision in every service is what prevents half-finished traces.
             .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(opts.SampleRatio)))
-            // RecordException: istisna, span'e tür/mesaj/yığın izi taşıyan bir
-            // olay olarak eklenir. "Hangi satırda patladı" sorusunun cevabı
-            // trace'in içinde durur, ayrı bir log aramaya gerek kalmaz.
+            // RecordException: the exception is added to the span as an event
+            // carrying its type, message and stack trace. The answer to "which
+            // line blew up" lives inside the trace, with no separate log hunt.
             .AddAspNetCoreInstrumentation(o => o.RecordException = true)
             .AddHttpClientInstrumentation(o => o.RecordException = true)
-            // SQL Server / Azure SQL. Sorgu metnini gizleme işi tek yerden,
-            // DropSqlTextProcessor üzerinden yürüyor: sağlayıcıya göre değişen
-            // ayar adlarına bağlı kalmıyoruz ve kural her veritabanı için aynı.
+            // SQL Server / Azure SQL. Hiding the query text is handled in one
+            // place, by DropSqlTextProcessor: we do not depend on setting names
+            // that differ per provider, and the rule is the same for every
+            // database.
             .AddSqlClientInstrumentation()
-            // Uygulamanın NabizTracer ile açtığı metot seviyesi span'ler.
+            // The method-level spans the application opens with NabizTracer.
             .AddSource(NabizTracer.SourceName)
-            // AddNabizCodeLevel() ile sarmalanan servislerin metot span'leri.
+            // The method spans of services wrapped by AddNabizCodeLevel().
             .AddSource(NabizCodeLevel.SourceName);
 
         if (opts.CaptureCodeLocation) builder.AddProcessor(new CodeLocationProcessor());
@@ -152,9 +155,9 @@ public static class NabizAgent
             var headers = opts.HeadersString();
             if (headers.Length > 0) exporter.Headers = headers;
 
-            // Gönderim arka planda ve toplu: istek yolunda ağ çağrısı yok.
-            // Kuyruk dolarsa span düşer — uygulamanın yavaşlaması yerine
-            // telemetri kaybı tercih edilir.
+            // Export is batched and in the background: no network call on the
+            // request path. If the queue fills, spans are dropped — losing
+            // telemetry is preferred over slowing the application down.
             exporter.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
             {
                 MaxQueueSize = 8192,
@@ -167,7 +170,7 @@ public static class NabizAgent
         return builder.Build()!;
     }
 
-    // OTLP/HTTP'de exporter yol ekini kendisi koyar, gRPC'de kök adres beklenir.
+    // Over OTLP/HTTP the exporter appends the path itself; gRPC expects the root address.
     private static Uri BuildEndpoint(NabizOptions opts)
     {
         var raw = opts.Endpoint.Trim().TrimEnd('/');
@@ -194,12 +197,12 @@ public static class NabizAgent
 }
 
 /// <summary>
-/// SQL metnini span'lerden siler.
+/// Strips the SQL text from spans.
 /// </summary>
 /// <remarks>
-/// Sorgu metni parametre değerleri ya da gömülü sabitler yoluyla kişisel veri
-/// taşıyabilir. Silme işlemi dışa aktarımdan önce, agent içinde yapılır:
-/// veri sunucuya hiç ulaşmaz.
+/// Query text can carry personal data through parameter values or inlined
+/// literals. The stripping happens before export, inside the agent: the data
+/// never reaches the server.
 /// </remarks>
 internal sealed class DropSqlTextProcessor : BaseProcessor<Activity>
 {

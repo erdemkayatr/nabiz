@@ -1,8 +1,8 @@
 using Npgsql;
 
-// Bu dosyada tek satır telemetri kodu yok. nabiz'in .NET desteği, OpenTelemetry
-// auto-instrumentation'ın CLR Profiler API'si üzerinden çalışır: uygulama
-// derlenirken değil, başlatılırken devreye girer.
+// There is not a line of telemetry code in this file. nabiz's .NET support
+// works through OpenTelemetry auto-instrumentation and the CLR Profiler API:
+// it engages when the application starts, not when it is compiled.
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -48,7 +48,7 @@ app.MapGet("/orders/{id:int}", async (NpgsqlDataSource db, int id) =>
     await using var reader = await cmd.ExecuteReaderAsync();
     if (!await reader.ReadAsync())
     {
-        return Results.NotFound(new { error = "sipariş bulunamadı", id });
+        return Results.NotFound(new { error = "order not found", id });
     }
     return Results.Ok(new
     {
@@ -59,16 +59,16 @@ app.MapGet("/orders/{id:int}", async (NpgsqlDataSource db, int id) =>
     });
 });
 
-// Hata oranı ve yavaş uç: topolojide kırmızı kenar ve gecikme dağılımı
-// görebilmek için kasıtlı.
+// A deliberate error rate and a slow endpoint, so the topology shows a red
+// edge and the latency distribution has something in its tail.
 app.MapGet("/orders/flaky", () =>
     Random.Shared.Next(100) < 15
-        ? Results.Problem("aşağı akış ödeme sağlayıcısı yanıt vermedi", statusCode: 503)
+        ? Results.Problem("the downstream payment provider did not respond", statusCode: 503)
         : Results.Ok(new { status = "ok" }));
 
 app.MapGet("/reports/daily", async (NpgsqlDataSource db) =>
 {
-    // pg_sleep ile bilerek yavaş bir sorgu: p99 kuyruğunu doldurur.
+        // A deliberately slow query using pg_sleep: it fills the p99 tail.
     await using var cmd = db.CreateCommand(
         "SELECT count(*), pg_sleep(0.15) FROM orders");
     await using var reader = await cmd.ExecuteReaderAsync();
@@ -106,7 +106,7 @@ static async Task EnsureSchemaAsync(NpgsqlDataSource db)
         }
         catch (NpgsqlException) when (attempt < 30)
         {
-            // Postgres henüz ayakta değil.
+                        // Postgres is not up yet.
             await Task.Delay(TimeSpan.FromSeconds(2));
         }
     }

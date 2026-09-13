@@ -1,27 +1,27 @@
 namespace Nabiz.Agent;
 
 /// <summary>
-/// İşaretli metot ya da tip, otomatik ölçümün dışında tutulur.
+/// The marked method or type is kept out of automatic measurement.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Tüm uygulamayı ölçüme aldığınızda bazı metotlar gürültüden başka bir şey
-/// üretmez: sıkı döngü içinde çağrılan minik yardımcılar, her istekte yüzlerce
-/// kez koşan erişimciler, ya da ölçüm maliyetinin işin kendisinden büyük
-/// olduğu metotlar. Bunları burada dışlarsınız.
+/// When the whole application is under measurement, some methods produce
+/// nothing but noise: tiny helpers called inside tight loops, accessors that
+/// run hundreds of times per request, or methods where measuring costs more
+/// than the work itself. This is where you exclude them.
 /// </para>
 /// <para>
-/// Tip üzerine konursa o tipin bütün metotları dışlanır.
+/// Placed on a type, it excludes every method of that type.
 /// </para>
 /// </remarks>
 /// <example>
 /// <code>
-/// public class SepetServisi : ISepetServisi
+/// public class CartService : ICartService
 /// {
-///     public Task&lt;decimal&gt; ToplamAsync(int adet) { ... }   // ölçülür
+///     public Task&lt;decimal&gt; TotalAsync(int count) { ... }   // measured
 ///
 ///     [NabizIgnore]
-///     public bool GecerliMi(int adet) => adet > 0;            // ölçülmez
+///     public bool IsValid(int count) => count > 0;           // not measured
 /// }
 /// </code>
 /// </example>
@@ -32,17 +32,17 @@ public sealed class NabizIgnoreAttribute : Attribute
 }
 
 /// <summary>
-/// İşaretli metot ya da tip, açıkça ölçüme alınır.
+/// The marked method or type is explicitly put under measurement.
 /// </summary>
 /// <remarks>
-/// Namespace filtresi dışında kalan ama izlemek istediğiniz bir tip varsa
-/// kullanılır. <see cref="NabizIgnoreAttribute"/> ile birlikte bulunursa
-/// dışlama kazanır: susturma kararı her zaman ölçme kararını yener.
+/// Used when a type falls outside the namespace filter but you still want to
+/// watch it. When it appears alongside <see cref="NabizIgnoreAttribute"/>, the
+/// exclusion wins: a decision to silence always beats a decision to measure.
 /// </remarks>
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class | AttributeTargets.Interface,
     Inherited = true)]
 public sealed class NabizTraceAttribute : Attribute
 {
-    /// <summary>Span adı. Verilmezse "Tip.Metot" kullanılır.</summary>
+    /// <summary>The span name. When omitted, "Type.Method" is used.</summary>
     public string? Name { get; set; }
 }

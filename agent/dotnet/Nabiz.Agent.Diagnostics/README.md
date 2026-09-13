@@ -1,14 +1,16 @@
 # Nabiz.Agent.Diagnostics
 
-nabiz agent'ı için talep üzerine **CPU profili** ve **bellek dump'ı**.
-Uygulamaya bir istek atarsınız, dosya üretilir.
+On-demand **CPU profiles** and **memory dumps** for the nabiz agent. You send
+the application a request, and the file is produced.
 
-> **Bellek dump'ı sürecin tüm belleğini diske yazar:** bağlantı dizeleri,
-> oturum jetonları, parolalar, müşteri verisi. Bu yüzden özellik varsayılan
-> olarak **kapalıdır** ve **jeton verilmeden açılmaz**.
+🇹🇷 [Türkçe](README.tr.md)
 
-Ayrı bir paket: tanılama IPC yığını yalnızca ihtiyacı olan uygulamalara
-girsin.
+> **A memory dump writes the entire memory of the process to disk:** connection
+> strings, session tokens, passwords, customer data. That is why the feature is
+> **off by default** and **does not turn on without a token**.
+
+A separate package, so the diagnostics IPC stack only enters applications that
+need it.
 
 ```bash
 dotnet add package Nabiz.Agent.Diagnostics
@@ -24,7 +26,7 @@ builder.Services.AddNabizDiagnostics();
 "diagnostics": {
   "enabled": true,
   "path": "/nabiz/diag",
-  "token": "en-az-16-karakter-rastgele-bir-deger",
+  "token": "at-least-16-random-characters",
   "outputDirectory": "",
   "maxFiles": 5,
   "maxCpuSeconds": 120,
@@ -32,10 +34,11 @@ builder.Services.AddNabizDiagnostics();
 }
 ```
 
-## nabiz arayüzünden
+## From the nabiz UI
 
-`nabiz.json`'da `apiUrl` tanımlıysa agent kendini nabiz'e tanıtır ve
-**Tanılama** menüsünde listelenir; dump'ı oradan tek tıkla alabilirsiniz.
+If `apiUrl` is set in `nabiz.json`, the agent registers itself with nabiz and
+appears under the **Diagnostics** menu; you can take a dump from there with one
+click.
 
 ```json
 "apiUrl": "http://nabiz-api:8080",
@@ -47,71 +50,78 @@ builder.Services.AddNabizDiagnostics();
 }
 ```
 
-nabiz, dump isteğini **kaydın geldiği IP'ye** atar; agent'ın iddia ettiği
-adrese değil. Kaynak IP geri erişilebilir değilse (NAT, vekil, Docker Desktop)
-`advertisedHost` doldurulur — bu yalnızca jetonla doğrulanmış kayıtlarda
-dikkate alınır.
+nabiz sends the dump request to **the IP the registration came from**, not to
+the address the agent claims. When the source IP is not routable back (NAT, a
+proxy, Docker Desktop), fill in `advertisedHost` — it is honoured only for
+token-verified registrations.
 
-`allowDownload` kapalıysa nabiz dosyayı çekemez; dosya uygulamanın diskinde
-kalır ve arayüzde "indirme kapalı" görünür.
+With `allowDownload` off, nabiz cannot fetch the file; it stays on the
+application's disk and the UI shows "download disabled".
 
-## Uçlar
+## Endpoints
 
-Hepsi `X-Nabiz-Token` başlığı ister.
+All of them require the `X-Nabiz-Token` header.
 
-| Uç | Ne yapar |
+| Endpoint | What it does |
 |---|---|
-| `POST /nabiz/diag/cpu?seconds=20` | CPU örneklemesi, `.nettrace` üretir |
-| `POST /nabiz/diag/memory?type=heap` | Bellek dump'ı, `.dmp` üretir |
-| `GET /nabiz/diag` | Üretilen dosyaları listeler |
-| `GET /nabiz/diag/{dosya}` | İndirir (`allowDownload` gerekir) |
-| `DELETE /nabiz/diag/{dosya}` | Siler |
-| `POST /nabiz/diag/cancel` | Koşan işi durdurur |
-
-`cancel`, `{"cancelled": bool, "reason": string}` döner. CPU profili
-kesilebilir: oturum kapatılır ve o ana kadarki örnekler geçerli bir dosya
-oluşturur. Bellek dump'ı kesilemez — `WriteDump` runtime'a gidiyor ve runtime
-süreci askıya alıp dosyayı yazıyor; yarıda kesmeye çalışmak askıya alınmış
-bir süreç bırakma riski taşır. O durumda `cancelled: false` ve nedeni döner.
+| `POST /nabiz/diag/cpu?seconds=20` | CPU sampling, produces a `.nettrace` |
+| `POST /nabiz/diag/memory?type=heap` | Memory dump, produces a `.dmp` |
+| `POST /nabiz/diag/cancel` | Stops the running job |
+| `GET /nabiz/diag` | Lists the produced files |
+| `GET /nabiz/diag/{file}` | Downloads one (requires `allowDownload`) |
+| `DELETE /nabiz/diag/{file}` | Deletes one |
 
 ```bash
 curl -X POST -H "X-Nabiz-Token: $TOKEN" \
   "http://localhost:5000/nabiz/diag/cpu?seconds=20"
 ```
 
-`type` değerleri: `heap` (varsayılan), `full`, `mini`, `triage`.
+`type` values: `heap` (default), `full`, `mini`, `triage`.
 
-## Çıktıyı okumak
+`cancel` returns `{"cancelled": bool, "reason": string}`. A CPU profile can be
+interrupted: the session is closed and the samples collected so far make a valid
+file. A memory dump cannot — `WriteDump` goes to the runtime, which suspends the
+process and writes the file; trying to cut it short risks leaving a suspended
+process behind. In that case `cancelled: false` comes back with the reason.
 
-CPU profili ham **nettrace**'tir; bilerek çözümlenmiyor. PerfView, Visual
-Studio ve `dotnet-trace convert` bu biçimi zaten okuyor — kendi
-çözümleyicimizi yazmak, hatalarını da üstlenmek olurdu.
+## Reading the output
+
+The CPU profile is raw **nettrace**, deliberately not decoded. PerfView, Visual
+Studio and `dotnet-trace convert` already read the format; writing our own
+decoder would mean owning its bugs too.
 
 ```bash
 dotnet-trace convert cpu-20260912-221500.nettrace --format speedscope
 ```
 
-Bellek dump'ı için `dotnet-dump analyze` ya da Visual Studio.
+For memory dumps, `dotnet-dump analyze` or Visual Studio.
 
-## Güvenlik
+## Security
 
-- Varsayılan kapalı; `enabled: true` **ve** en az 16 karakterlik bir jeton
-  gerekir. Jeton kısaysa uçlar açılmaz ve nedeni loglanır.
-- Jeton sabit zamanlı karşılaştırılır.
-- `allowDownload` ayrı bir anahtardır. Açmak, jetonu ele geçiren birinin
-  süreç belleğini HTTP üzerinden indirebilmesi demektir. Kapalıyken dosyalar
-  diskte durur; `kubectl cp` ile alınır.
-- Her dump isteği istemci adresiyle loglanır.
-- Aynı anda tek işlem koşar: iki bellek dump'ı birlikte alınırsa süreç iki kez
-  askıya alınır ve zaten sıkıntıda olan bir uygulama büsbütün durur.
+- Off by default; it needs `enabled: true` **and** a token of at least 16
+  characters. A short token leaves the endpoints closed, and the reason is
+  logged.
+- The token is compared in constant time.
+- `allowDownload` is a separate switch. Turning it on means anyone who obtains
+  the token can download the process's memory over HTTP. While it is off the
+  files simply stay on disk and are collected with `kubectl cp`.
+- Every dump request is logged with the client address.
+- Only one operation runs at a time: two concurrent memory dumps would suspend
+  the process twice and bring an application that is already in trouble to a
+  complete stop.
 
-## Maliyet
+## Cost
 
-- **CPU profili:** örnekleme süresince ölçülebilir ek yük. Kısa pencereler
-  kullanın; `maxCpuSeconds` üst sınırı korur.
-- **Bellek dump'ı:** süreç, dump yazılırken **askıya alınır**. Yerel bir
-  ölçümde 444 MB'lık bir dump 3.8 saniye sürdü — o süre boyunca uygulama
-  istek işlemez. Üretimde trafiği kesilmiş bir örnekte alın.
-- Kubernetes'te yazılabilir bir dizin gerekir; `readOnlyRootFilesystem` ile
-  çalışan pod'lara bir `emptyDir` bağlayın ve `outputDirectory`'yi oraya
-  gösterin.
+- **CPU profile:** measurable overhead for the duration of the sampling. Use
+  short windows; `maxCpuSeconds` enforces an upper bound.
+- **Memory dump:** the process is **suspended** while the dump is written. In a
+  local measurement a 444 MB dump took 3.8 seconds, and the application served
+  no requests during it. Take it on an instance that has been taken out of
+  rotation.
+- In Kubernetes a writable directory is required; for pods running with
+  `readOnlyRootFilesystem`, mount an `emptyDir` and point `outputDirectory` at
+  it.
+
+## License
+
+[Apache License 2.0](https://github.com/erdemkayatr/nabiz/blob/main/LICENSE)

@@ -4,20 +4,20 @@ using OpenTelemetry;
 namespace Nabiz.Agent;
 
 /// <summary>
-/// Hatalı span'lere kod konumu ekler.
+/// Adds the code location to failing spans.
 /// </summary>
 /// <remarks>
-/// İstisna olayı yığın izini zaten taşıyor ama bu çok satırlı bir metin; bir
-/// liste görünümünde okunamaz. Bu işlemci yığın izinin uygulamaya ait ilk
-/// karesini ayıklayıp <c>code.*</c> alanlarına yazar, böylece "hangi dosyanın
-/// kaçıncı satırı" bilgisi trace listesinde tek bakışta görünür.
+/// The exception event already carries the stack trace, but that is multi-line
+/// text and unreadable in a list view. This processor extracts the first frame
+/// belonging to the application and writes it into the <c>code.*</c> fields, so
+/// which line of which file is visible at a glance in the trace list.
 ///
-/// Yalnızca hatalı span'lerde çalışır: her span için yığın çözümlemek, ölçmeye
-/// çalıştığımız gecikmenin kendisini bozacak kadar pahalıdır.
+/// It only runs on failing spans: parsing a stack for every span would be
+/// expensive enough to distort the very latency we are trying to measure.
 /// </remarks>
 internal sealed class CodeLocationProcessor : BaseProcessor<Activity>
 {
-    // Çerçeve kodunu atla: kullanıcıya kendi kodunun ilk karesi lazım.
+    // Skip framework code: what the user needs is the first frame of their own.
     private static readonly string[] SkipPrefixes =
     {
         "System.", "Microsoft.", "OpenTelemetry.", "Nabiz.Agent.",

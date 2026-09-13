@@ -4,38 +4,39 @@ using System.Runtime.CompilerServices;
 namespace Nabiz.Agent;
 
 /// <summary>
-/// Metot seviyesinde zamanlama için ince bir sarmalayıcı.
+/// A thin wrapper for method-level timing.
 /// </summary>
 /// <remarks>
-/// Otomatik enstrümantasyon istekleri, HTTP çağrılarını ve veritabanı
-/// sorgularını görür ama aradaki kendi kodunuzu görmez. Bir isteğin 200 ms
-/// sürdüğünü bilmek, o 200 ms'in nerede geçtiğini söylemez.
+/// Automatic instrumentation sees requests, HTTP calls and database queries,
+/// but not your own code in between. Knowing that a request took 200 ms does
+/// not tell you where those 200 ms went.
 ///
-/// Gerçek metot seviyesi profilleme CLR Profiler API'si ile IL'i yeniden
-/// yazmayı gerektirir; bu da her metoda ölçüm maliyeti bindirir. Buradaki
-/// yaklaşım bilinçli olarak seçmeli: ölçmek istediğiniz yeri siz
-/// işaretlersiniz, dosya ve satır bilgisi derleyiciden bedavaya gelir.
+/// Real method-level profiling means rewriting IL through the CLR Profiler API,
+/// which puts a measurement cost on every single method. The approach here is
+/// deliberately selective: you mark the place you want measured, and the file
+/// and line come free from the compiler.
 /// </remarks>
 public static class NabizTracer
 {
-    /// <summary>Bu sarmalayıcının kullandığı ActivitySource adı.</summary>
+    /// <summary>The ActivitySource name this wrapper uses.</summary>
     public const string SourceName = "Nabiz.Agent.CodeLevel";
 
     private static readonly ActivitySource Source = new(SourceName);
 
     /// <summary>
-    /// Bir kod bloğunu ölçer. Dönen nesne <c>using</c> ile kapatılmalıdır.
+    /// Measures a block of code. The returned object must be closed with
+    /// <c>using</c>.
     /// </summary>
     /// <param name="name">
-    /// Span adı. Verilmezse çağıran metodun adı kullanılır.
+    /// The span name. When omitted, the calling method's name is used.
     /// </param>
-    /// <param name="member">Derleyici doldurur; çağıran metodun adı.</param>
-    /// <param name="file">Derleyici doldurur; çağıran dosyanın yolu.</param>
-    /// <param name="line">Derleyici doldurur; çağrının satır numarası.</param>
+    /// <param name="member">Filled in by the compiler; the calling method's name.</param>
+    /// <param name="file">Filled in by the compiler; the calling file's path.</param>
+    /// <param name="line">Filled in by the compiler; the call's line number.</param>
     /// <example>
     /// <code>
-    /// using var span = NabizTracer.Start();          // metot adıyla
-    /// using var span = NabizTracer.Start("fiyat hesapla");
+    /// using var span = NabizTracer.Start();          // named after the method
+    /// using var span = NabizTracer.Start("calculate price");
     /// </code>
     /// </example>
     public static NabizSpan Start(
@@ -47,8 +48,8 @@ public static class NabizTracer
         var activity = Source.StartActivity(name ?? member, ActivityKind.Internal);
         if (activity is null) return default;
 
-        // OpenTelemetry code semantic conventions. nabiz arayüzü bu alanları
-        // okuyup "hangi dosyanın kaçıncı satırı" bilgisini gösterir.
+        // OpenTelemetry code semantic conventions. The nabiz UI reads these
+        // fields to show which line of which file a span came from.
         activity.SetTag("code.function.name", member);
         if (!string.IsNullOrEmpty(file))
         {
@@ -58,7 +59,7 @@ public static class NabizTracer
         return new NabizSpan(activity);
     }
 
-    /// <summary>Bir eylemi ölçer.</summary>
+    /// <summary>Measures an action.</summary>
     public static void Measure(
         string name, Action action,
         [CallerMemberName] string member = "",
@@ -77,7 +78,7 @@ public static class NabizTracer
         }
     }
 
-    /// <summary>Bir fonksiyonu ölçer ve sonucunu döndürür.</summary>
+    /// <summary>Measures a function and returns its result.</summary>
     public static T Measure<T>(
         string name, Func<T> func,
         [CallerMemberName] string member = "",
@@ -96,7 +97,7 @@ public static class NabizTracer
         }
     }
 
-    /// <summary>Bir asenkron işlemi ölçer.</summary>
+    /// <summary>Measures an asynchronous operation.</summary>
     public static async Task<T> MeasureAsync<T>(
         string name, Func<Task<T>> func,
         [CallerMemberName] string member = "",
@@ -115,7 +116,7 @@ public static class NabizTracer
         }
     }
 
-    /// <summary>Bir asenkron eylemi ölçer.</summary>
+    /// <summary>Measures an asynchronous action.</summary>
     public static async Task MeasureAsync(
         string name, Func<Task> func,
         [CallerMemberName] string member = "",
@@ -136,12 +137,12 @@ public static class NabizTracer
 }
 
 /// <summary>
-/// <see cref="NabizTracer.Start"/> tarafından döndürülen ölçüm kapsamı.
+/// The measurement scope returned by <see cref="NabizTracer.Start"/>.
 /// </summary>
 /// <remarks>
-/// Struct olması bilinçli: örnekleme kararı span'i düşürdüğünde
-/// <c>default</c> döner ve hiçbir nesne ayrılmaz. Kapalı bir agent'ın
-/// maliyeti bir null kontrolüne iner.
+/// Being a struct is deliberate: when the sampling decision drops the span it
+/// returns <c>default</c> and nothing is allocated. The cost of a disabled
+/// agent comes down to a single null check.
 /// </remarks>
 public readonly struct NabizSpan : IDisposable
 {
@@ -149,17 +150,17 @@ public readonly struct NabizSpan : IDisposable
 
     internal NabizSpan(Activity? activity) => _activity = activity;
 
-    /// <summary>Altındaki Activity; span örneklenmediyse null.</summary>
+    /// <summary>The underlying Activity; null when the span was not sampled.</summary>
     public Activity? Activity => _activity;
 
-    /// <summary>Span'e etiket ekler.</summary>
+    /// <summary>Adds a tag to the span.</summary>
     public NabizSpan SetTag(string key, object? value)
     {
         _activity?.SetTag(key, value);
         return this;
     }
 
-    /// <summary>Span'i hatalı işaretler ve istisnayı yığın iziyle kaydeder.</summary>
+    /// <summary>Marks the span as failed and records the exception with its stack trace.</summary>
     public NabizSpan Fail(Exception ex)
     {
         if (_activity is null) return this;

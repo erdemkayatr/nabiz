@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -trimpath ./...
+
+      # The race detector is what catches the sharded pairing table's
+      # concurrency bugs; a plain `go test` would run green past them.
+      - name: Test (race detector)
+        run: go test -race ./...
+
+      - name: Benchmark the topology hot path
+        run: go test -run=XXX -bench=. -benchmem ./internal/topology/...
+
+  dotnet:
+    name: .NET agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Nabiz.Agent
+        run: dotnet build agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj -c Release
+
+      # The Diagnostics package references Nabiz.Agent by version, so it is
+      # packed and restored from a local feed rather than nuget.org — otherwise
+      # CI would test the published version instead of this commit.
+      #
+      # The path is fixed by agent/dotnet/Nabiz.Agent.Diagnostics/NuGet.config,
+      # which clears the sources and points at ../local-feed.
+      - name: Pack Nabiz.Agent into the local feed
+        run: dotnet pack agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj -c Release -o agent/dotnet/local-feed
+
+      - name: Build Nabiz.Agent.Diagnostics
+        run: dotnet build agent/dotnet/Nabiz.Agent.Diagnostics/Nabiz.Agent.Diagnostics.csproj -c Release
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the nabiz image
+        run: docker build -f deploy/docker/Dockerfile -t nabiz:ci .

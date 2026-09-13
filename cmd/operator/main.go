@@ -1,8 +1,8 @@
-// nabiz-operator, .NET uygulamalarına enstrümantasyonu otomatik enjekte eden
-// mutating admission webhook'udur.
+// nabiz-operator is the admission webhook that automatically injects
+// instrumentation into .NET applications.
 //
-// Açılışta kendi sertifikasını üretir ve MutatingWebhookConfiguration'daki
-// caBundle'ı günceller; kurulum için cert-manager gerekmez.
+// It generates its own certificate at startup and updates the caBundle in the
+// MutatingWebhookConfiguration; cert-manager is not needed to install it.
 package main
 
 import (
@@ -44,14 +44,14 @@ func main() {
 
 	cert, caBundle, err := nabizk8s.SelfSignedCert(serviceName, namespace, 10*365*24*time.Hour)
 	if err != nil {
-		log.Error("sertifika üretilemedi", "err", err)
+		log.Error("could not generate the certificate", "err", err)
 		os.Exit(1)
 	}
 
 	if err := patchCABundle(ctx, webhookConfigName, caBundle, log); err != nil {
-		// caBundle güncellenemezse webhook çağrılamaz; sessizce devam etmek
-		// "enjeksiyon neden çalışmıyor" hata ayıklamasına dönüşür.
-		log.Error("MutatingWebhookConfiguration güncellenemedi", "err", err)
+		// If the caBundle cannot be updated the webhook is never called, and
+		// carrying on quietly turns into a "why is injection not working" hunt.
+		log.Error("could not update the MutatingWebhookConfiguration", "err", err)
 		os.Exit(1)
 	}
 
@@ -71,33 +71,33 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("nabiz-operator çalışıyor",
+	log.Info("nabiz-operator running",
 		"addr", addr,
 		"namespace", namespace,
 		"collector", cfg.CollectorEndpoint,
 		"instrumentation_image", cfg.InstrumentationImage)
 
 	if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-		log.Error("webhook kapandı", "err", err)
+		log.Error("the webhook stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-// patchCABundle, webhook yapılandırmasındaki tüm girdilere üretilen CA'yı yazar.
+// patchCABundle writes the generated CA into every entry of the webhook configuration.
 func patchCABundle(ctx context.Context, name string, caBundle []byte, log *slog.Logger) error {
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
-		return fmt.Errorf("küme içi yapılandırma okunamadı: %w", err)
+		return fmt.Errorf("could not read the in-cluster configuration: %w", err)
 	}
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return fmt.Errorf("kubernetes istemcisi kurulamadı: %w", err)
+		return fmt.Errorf("could not build the kubernetes client: %w", err)
 	}
 
 	existing, err := client.AdmissionregistrationV1().
 		MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("%s okunamadı: %w", name, err)
+		return fmt.Errorf("could not read %s: %w", name, err)
 	}
 
 	ops := make([]map[string]any, 0, len(existing.Webhooks))
@@ -109,7 +109,7 @@ func patchCABundle(ctx context.Context, name string, caBundle []byte, log *slog.
 		})
 	}
 	if len(ops) == 0 {
-		return fmt.Errorf("%s içinde webhook tanımı yok", name)
+		return fmt.Errorf("%s contains no webhook definitions", name)
 	}
 
 	payload, err := json.Marshal(ops)
@@ -119,10 +119,10 @@ func patchCABundle(ctx context.Context, name string, caBundle []byte, log *slog.
 	if _, err := client.AdmissionregistrationV1().
 		MutatingWebhookConfigurations().
 		Patch(ctx, name, types.JSONPatchType, payload, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("caBundle yazılamadı: %w", err)
+		return fmt.Errorf("could not write the caBundle: %w", err)
 	}
 
-	log.Info("caBundle güncellendi", "webhook_config", name, "webhooks", len(ops))
+	log.Info("caBundle updated", "webhook_config", name, "webhooks", len(ops))
 	return nil
 }
 
@@ -143,6 +143,6 @@ func serveStats(addr string, wh *nabizk8s.Webhook, log *slog.Logger) {
 	})
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("stats ucu kapandı", "err", err)
+		log.Error("the stats endpoint stopped", "err", err)
 	}
 }

@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
-# Bu imaj bir uygulama çalıştırmaz: yalnızca OpenTelemetry .NET
-# auto-instrumentation dosyalarını taşır. Operator'ın enjekte ettiği init
-# container bunu paylaşımlı bir emptyDir'e kopyalar.
+# This image runs no application: it only carries the OpenTelemetry .NET
+# auto-instrumentation files. The init container the operator injects copies
+# them into a shared emptyDir.
 #
-# glibc ve musl varyantlarının ikisi de içeride: hangisinin kullanılacağına
-# pod'daki nabiz.io/libc annotation'ı karar verir.
+# Both the glibc and musl variants are inside: which one is used is decided by
+# the nabiz.io/libc annotation on the pod.
 ARG OTEL_AUTO_VERSION=1.16.0
 
 FROM alpine:3.21 AS fetch
@@ -28,6 +28,6 @@ FROM alpine:3.21
 RUN adduser -D -u 10001 nabiz
 COPY --from=fetch --chown=10001:10001 /otel /otel
 USER 10001
-# Init container komutu operator tarafından verilir; bu ENTRYPOINT yalnızca
-# imajı elle incelemek içindir.
+# The init container's command is supplied by the operator; this ENTRYPOINT is
+# only for inspecting the image by hand.
 ENTRYPOINT ["/bin/sh"]

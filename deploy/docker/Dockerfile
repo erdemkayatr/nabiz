@@ -6,7 +6,7 @@ ARG GO_VERSION=1.27
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 
-# Bağımlılıklar ayrı katmanda: kaynak değişince yeniden indirilmesin.
+# Dependencies in their own layer, so a source change does not re-download them.
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
@@ -18,8 +18,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/nabiz ./cmd/${CMD}
 
-# Statik binary; dağıtımın kendisi ayak izi olmasın diye scratch değil
-# alpine: shell ve CA sertifikaları hata ayıklamada işe yarıyor.
+# A static binary; alpine rather than scratch so the deployment has a shell and
+# CA certificates, both of which earn their keep while debugging.
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata && \
     adduser -D -u 10001 nabiz

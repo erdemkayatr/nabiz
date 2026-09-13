@@ -1,8 +1,8 @@
-// Package clickhouse, span ve topoloji kenarlarını ClickHouse'a yazar.
+// Package clickhouse writes spans and topology edges to ClickHouse.
 //
-// Yazma yolu native protokol + kolon bazlı batch üzerinden gider: satır satır
-// INSERT yerine hazır bir batch'e kolon kolon append yapılır. Bu, aynı veri
-// için 10-20 kat daha az CPU demek.
+// The write path goes through the native protocol and column-wise batches:
+// instead of row-by-row INSERTs, values are appended column by column to a
+// prepared batch. That is 10-20x less CPU for the same data.
 package clickhouse
 
 import (
@@ -20,21 +20,21 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/topology"
 )
 
-// Config, ClickHouse bağlantı ayarları.
+// Config holds the ClickHouse connection settings.
 type Config struct {
 	Addrs    []string
 	Database string
 	Username string
 	Password string
 
-	// TTLDays, ham span'lerin saklanma süresi.
+	// TTLDays is how long raw spans are kept.
 	TTLDays int
-	// MaxOpenConns, eşzamanlı yazan worker sayısına göre seçilir.
+	// MaxOpenConns is chosen to match the number of concurrent writing workers.
 	MaxOpenConns int
 	DialTimeout  time.Duration
 }
 
-// DefaultConfig, yerel geliştirme için varsayılanlar.
+// DefaultConfig returns defaults suited to local development.
 func DefaultConfig() Config {
 	return Config{
 		Addrs:        []string{"localhost:9000"},
@@ -46,15 +46,15 @@ func DefaultConfig() Config {
 	}
 }
 
-// Stats, depolama sayaçları.
+// Stats holds the storage counters.
 type Stats struct {
 	SpansWritten atomic.Uint64
 	EdgesWritten atomic.Uint64
 	WriteErrors  atomic.Uint64
-	WriteLatency atomic.Int64 // son batch, mikrosaniye
+	WriteLatency atomic.Int64 // the last batch, in microseconds
 }
 
-// Store, ClickHouse bağlantısını ve yazma yollarını tutar.
+// Store holds the ClickHouse connection and the write paths.
 type Store struct {
 	conn  driver.Conn
 	cfg   Config
@@ -62,7 +62,7 @@ type Store struct {
 	stats Stats
 }
 
-// Open, bağlantıyı açar ve canlılığını doğrular.
+// Open opens the connection and verifies it is alive.
 func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	if len(cfg.Addrs) == 0 {
 		cfg = DefaultConfig()
@@ -70,7 +70,7 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: cfg.Addrs,
 		Auth: clickhouse.Auth{
-			Database: "default", // veritabanı henüz yoksa bağlanabilmek için
+			Database: "default", // so we can connect before the database exists
 			Username: cfg.Username,
 			Password: cfg.Password,
 		},
@@ -79,51 +79,51 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 		MaxIdleConns: cfg.MaxOpenConns,
 		DialTimeout:  cfg.DialTimeout,
 		Settings: clickhouse.Settings{
-			// Yazma kuyruğu birikirse ClickHouse'un bize geri basınç
-			// uygulaması normaldir; pipeline zaten sınırlı.
+			// It is fine for ClickHouse to push back when the write queue
+			// builds up; the pipeline is already bounded.
 			"max_execution_time": 60,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("clickhouse bağlantısı açılamadı: %w", err)
+		return nil, fmt.Errorf("could not open the clickhouse connection: %w", err)
 	}
 	if err := conn.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("clickhouse ping başarısız: %w", err)
+		return nil, fmt.Errorf("clickhouse ping failed: %w", err)
 	}
 	return &Store{conn: conn, cfg: cfg, log: log}, nil
 }
 
-// Close, bağlantıyı kapatır.
+// Close closes the connection.
 func (s *Store) Close() error { return s.conn.Close() }
 
-// Conn, sorgu tarafının (API) kullanması için bağlantıyı verir.
+// Conn exposes the connection for the query side (the API) to use.
 func (s *Store) Conn() driver.Conn { return s.conn }
 
-// Database, aktif veritabanı adı.
+// Database is the active database name.
 func (s *Store) Database() string { return s.cfg.Database }
 
-// Stats, sayaçlara erişim verir.
+// Stats exposes the counters.
 func (s *Store) Stats() *Stats { return &s.stats }
 
-// Migrate, veritabanını ve tabloları idempotent olarak oluşturur.
+// Migrate creates the database and tables idempotently.
 func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.conn.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+s.cfg.Database); err != nil {
-		return fmt.Errorf("veritabanı oluşturulamadı: %w", err)
+		return fmt.Errorf("could not create the database: %w", err)
 	}
 	ttl := strconv.Itoa(s.cfg.TTLDays)
 	for i, stmt := range Schema {
 		stmt = strings.ReplaceAll(stmt, "{{TTL_DAYS}}", ttl)
-		// Tablolar hedef veritabanında oluşsun.
+		// Create the tables in the target database.
 		stmt = qualify(stmt, s.cfg.Database)
 		if err := s.conn.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("şema adımı %d başarısız: %w", i, err)
+			return fmt.Errorf("schema step %d failed: %w", i, err)
 		}
 	}
-	s.log.Info("clickhouse şeması hazır", "database", s.cfg.Database, "ttl_days", s.cfg.TTLDays)
+	s.log.Info("clickhouse schema ready", "database", s.cfg.Database, "ttl_days", s.cfg.TTLDays)
 	return nil
 }
 
-// qualify, DDL içindeki tablo adlarını veritabanı adıyla niteler.
+// qualify prefixes the table names inside the DDL with the database name.
 func qualify(stmt, db string) string {
 	repl := strings.NewReplacer(
 		"CREATE TABLE IF NOT EXISTS ", "CREATE TABLE IF NOT EXISTS "+db+".",
@@ -135,12 +135,12 @@ func qualify(stmt, db string) string {
 	return repl.Replace(stmt)
 }
 
-// --- yazma: span'ler ---
+// --- writing: spans ---
 
-// Name, pipeline.Processor arayüzü için.
+// Name satisfies the pipeline.Processor interface.
 func (s *Store) Name() string { return "clickhouse-spans" }
 
-// Process, bir batch span'i tek seferde yazar.
+// Process writes a batch of spans in one go.
 func (s *Store) Process(ctx context.Context, spans []*model.Span) error {
 	if len(spans) == 0 {
 		return nil
@@ -150,7 +150,7 @@ func (s *Store) Process(ctx context.Context, spans []*model.Span) error {
 	batch, err := s.conn.PrepareBatch(ctx, qualifyInsert(InsertSpansSQL, s.cfg.Database))
 	if err != nil {
 		s.stats.WriteErrors.Add(1)
-		return fmt.Errorf("span batch hazırlanamadı: %w", err)
+		return fmt.Errorf("could not prepare the span batch: %w", err)
 	}
 
 	for _, sp := range spans {
@@ -173,22 +173,22 @@ func (s *Store) Process(ctx context.Context, spans []*model.Span) error {
 		)
 		if err != nil {
 			s.stats.WriteErrors.Add(1)
-			return fmt.Errorf("span append başarısız: %w", err)
+			return fmt.Errorf("span append failed: %w", err)
 		}
 	}
 
 	if err := batch.Send(); err != nil {
 		s.stats.WriteErrors.Add(1)
-		return fmt.Errorf("span batch gönderilemedi: %w", err)
+		return fmt.Errorf("could not send the span batch: %w", err)
 	}
 	s.stats.SpansWritten.Add(uint64(len(spans)))
 	s.stats.WriteLatency.Store(time.Since(start).Microseconds())
 	return nil
 }
 
-// --- yazma: topoloji kenarları ---
+// --- writing: topology edges ---
 
-// WriteEdges, topology.EdgeSink arayüzünü karşılar.
+// WriteEdges satisfies the topology.EdgeSink interface.
 func (s *Store) WriteEdges(ctx context.Context, edges []topology.EdgeSample) error {
 	if len(edges) == 0 {
 		return nil
@@ -196,7 +196,7 @@ func (s *Store) WriteEdges(ctx context.Context, edges []topology.EdgeSample) err
 	batch, err := s.conn.PrepareBatch(ctx, qualifyInsert(InsertEdgesSQL, s.cfg.Database))
 	if err != nil {
 		s.stats.WriteErrors.Add(1)
-		return fmt.Errorf("edge batch hazırlanamadı: %w", err)
+		return fmt.Errorf("could not prepare the edge batch: %w", err)
 	}
 
 	for i := range edges {
@@ -214,13 +214,13 @@ func (s *Store) WriteEdges(ctx context.Context, edges []topology.EdgeSample) err
 		}
 		if err := batch.Append(args...); err != nil {
 			s.stats.WriteErrors.Add(1)
-			return fmt.Errorf("edge append başarısız: %w", err)
+			return fmt.Errorf("edge append failed: %w", err)
 		}
 	}
 
 	if err := batch.Send(); err != nil {
 		s.stats.WriteErrors.Add(1)
-		return fmt.Errorf("edge batch gönderilemedi: %w", err)
+		return fmt.Errorf("could not send the edge batch: %w", err)
 	}
 	s.stats.EdgesWritten.Add(uint64(len(edges)))
 	return nil
@@ -258,8 +258,8 @@ func flattenLinks(links []model.Link) ([]string, []string) {
 	return traces, spans
 }
 
-// nilSafeMap, nil map'i boş map'e çevirir: ClickHouse sürücüsü Map kolonuna
-// nil kabul etmiyor.
+// nilSafeMap turns a nil map into an empty one: the ClickHouse driver does not
+// accept nil for a Map column.
 func nilSafeMap(m map[string]string) map[string]string {
 	if m == nil {
 		return map[string]string{}

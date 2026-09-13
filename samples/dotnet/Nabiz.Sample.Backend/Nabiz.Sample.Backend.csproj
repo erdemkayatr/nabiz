@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Tek bağımlılık Npgsql. OpenTelemetry paketi YOK: enstrümantasyon
-         çalışma anında CLR profiler ile ekleniyor, kodda izi yok. -->
+        <!-- The only dependency is Npgsql. NO OpenTelemetry package:
+                  instrumentation is added at runtime by the CLR profiler, leaving no trace in the code. -->
     <PackageReference Include="Npgsql" Version="9.0.3" />
   </ItemGroup>
 

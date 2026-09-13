@@ -1,10 +1,10 @@
-// Package identity, nabiz'in denetim düzlemini tutar: kullanıcılar, rol
-// grupları, projeler ve uygulama atamaları.
+// Package identity holds nabiz's control plane: users, role groups, projects
+// and application assignments.
 //
-// Bu veri ClickHouse'a ait değil. Telemetri tablolarının tamamı append-only
-// ve nihai tutarlı; kimlik verisi ise benzersizlik kısıtı, transaction ve
-// yerinde güncelleme ister. Bu yüzden denetim düzlemi ayrı bir PostgreSQL'de
-// durur.
+// This data does not belong in ClickHouse. The telemetry tables are all
+// append-only and eventually consistent, whereas identity data needs uniqueness
+// constraints, transactions and in-place updates. The control plane therefore
+// lives in a separate PostgreSQL.
 package identity
 
 import (
@@ -12,34 +12,35 @@ import (
 	"time"
 )
 
-// Permission, bir rol grubunun verebileceği yetki.
+// Permission is a capability a role group can grant.
 type Permission string
 
 const (
-	// PermTopologyRead, projenin topoloji grafiğini görmeyi sağlar.
+	// PermTopologyRead allows viewing the project's topology graph.
 	PermTopologyRead Permission = "topology.read"
-	// PermServicesRead, RED metriklerini görmeyi sağlar.
+	// PermServicesRead allows viewing RED metrics.
 	PermServicesRead Permission = "services.read"
-	// PermTracesRead, trace arama ve şelale görünümünü açar.
+	// PermTracesRead opens trace search and the waterfall view.
 	PermTracesRead Permission = "traces.read"
-	// PermProjectManage, projeye uygulama ekleyip çıkarmayı sağlar.
+	// PermProjectManage allows adding and removing a project's applications.
 	PermProjectManage Permission = "project.manage"
-	// PermDiagnostics, uygulamalardan CPU profili ve bellek dump'ı almayı
-	// sağlar. Ayrı bir yetki: bellek dump'ı bağlantı dizesi, jeton ve müşteri
-	// verisi içerdiği için trace okumakla aynı şey değildir.
+	// PermDiagnostics allows taking CPU profiles and memory dumps from
+	// applications. It is a separate permission: a memory dump contains
+	// connection strings, tokens and customer data, so it is not the same thing
+	// as reading traces.
 	PermDiagnostics Permission = "diagnostics.manage"
-	// PermAdmin, denetim düzleminin tamamını yönetir: kullanıcı, rol grubu,
-	// proje. Yalnızca sistem yöneticilerine verilir.
+	// PermAdmin manages the whole control plane: users, role groups, projects.
+	// Granted to system administrators only.
 	PermAdmin Permission = "admin.manage"
 )
 
-// AllPermissions, arayüzün yetki seçicisini doldurmak için.
+// AllPermissions populates the UI's permission picker.
 var AllPermissions = []Permission{
 	PermTopologyRead, PermServicesRead, PermTracesRead, PermProjectManage,
 	PermDiagnostics, PermAdmin,
 }
 
-// ValidPermission, bilinmeyen yetkilerin veritabanına sızmasını engeller.
+// ValidPermission keeps unknown permissions from leaking into the database.
 func ValidPermission(p Permission) bool {
 	for _, known := range AllPermissions {
 		if known == p {
@@ -49,7 +50,7 @@ func ValidPermission(p Permission) bool {
 	return false
 }
 
-// User, sisteme giren kişi.
+// User is a person who signs in.
 type User struct {
 	ID           string     `json:"id"`
 	Email        string     `json:"email"`
@@ -59,18 +60,19 @@ type User struct {
 	CreatedAt    time.Time  `json:"createdAt"`
 	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty"`
 
-	// Yalnızca liste uçlarında doldurulur.
+	// Only populated on list endpoints.
 	RoleGroups []RoleGroupRef `json:"roleGroups,omitempty"`
 }
 
-// RoleGroupRef, kullanıcı listesinde rol grubunu özetler.
+// RoleGroupRef summarises a role group in the user list.
 type RoleGroupRef struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// RoleGroup, yetki kümesi taşıyan kullanıcı grubu. Yetki doğrudan kullanıcıya
-// değil gruba verilir; projeye bağlanan da gruptur.
+// RoleGroup is a group of users carrying a set of permissions. Permissions are
+// granted to the group rather than directly to a user, and it is the group that
+// binds to a project.
 type RoleGroup struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
@@ -82,7 +84,7 @@ type RoleGroup struct {
 	ProjectCount int `json:"projectCount"`
 }
 
-// Project, uygulamaların ve erişim yetkisinin toplandığı birim.
+// Project is the unit that groups applications and access.
 type Project struct {
 	ID          string    `json:"id"`
 	Key         string    `json:"key"`
@@ -94,7 +96,7 @@ type Project struct {
 	RoleGroups   []RoleGroupRef `json:"roleGroups,omitempty"`
 }
 
-// AgentInstance, telemetri gönderen ve kendini tanıtan bir uygulama örneği.
+// AgentInstance is an application instance that sends telemetry and registers itself.
 type AgentInstance struct {
 	ID           string `json:"id"`
 	ServiceName  string `json:"serviceName"`
@@ -105,29 +107,29 @@ type AgentInstance struct {
 	PID          int    `json:"pid"`
 	AgentVersion string `json:"agentVersion,omitempty"`
 
-	// DiagPort ve DiagPath, tanılama ucunun yeri. Host bilerek saklanmaz:
-	// nabiz her zaman kaydın geldiği IP'yi kullanır, agent'ın iddia ettiği
-	// adresi değil. Aksi halde sahte bir kayıt, nabiz'i jetonu saldırganın
-	// adresine göndermeye ikna edebilirdi.
+	// DiagPort and DiagPath locate the diagnostics endpoint. The host is
+	// deliberately not stored: nabiz always uses the IP the registration came
+	// from, never the address the agent claims. Otherwise a forged registration
+	// could talk nabiz into sending the token to an attacker's address.
 	SourceIP string `json:"sourceIp"`
-	// AdvertisedHost, agent'ın bildirdiği adres. YALNIZCA doğrulanmış
-	// kayıtlarda kullanılır: jetonu bilen taraf kimliğini zaten kanıtlamıştır.
-	// Doğrulanmamış kayıtlarda her zaman SourceIP kullanılır, aksi halde
-	// sahte bir kayıt nabiz'i başka bir hedefe yönlendirebilirdi.
+	// AdvertisedHost is the address the agent reports. It is used ONLY for
+	// verified registrations: a party that knows the token has already proven
+	// its identity. Unverified registrations always fall back to SourceIP, or a
+	// forged registration could redirect nabiz to another target.
 	AdvertisedHost string `json:"advertisedHost,omitempty"`
 	DiagPort       int    `json:"diagPort"`
 	DiagPath       string `json:"diagPath"`
 	DiagReady      bool   `json:"diagReady"`
 
-	// Verified, kaydın proje jetonuyla doğrulandığını söyler. Doğrulanmamış
-	// örneklerde dump tetiklenemez.
+	// Verified says the registration was validated against the project token.
+	// Dumps cannot be triggered on unverified instances.
 	Verified  bool      `json:"verified"`
 	ProjectID string    `json:"projectId,omitempty"`
 	FirstSeen time.Time `json:"firstSeen"`
 	LastSeen  time.Time `json:"lastSeen"`
 }
 
-// DumpArtifact, nabiz'in bir uygulamadan çekip sakladığı dosya.
+// DumpArtifact is a file nabiz fetched from an application and stored.
 type DumpArtifact struct {
 	ID          string    `json:"id"`
 	InstanceID  string    `json:"instanceId"`
@@ -141,27 +143,27 @@ type DumpArtifact struct {
 	Error       string    `json:"error,omitempty"`
 }
 
-// Session, giriş yapmış bir tarayıcı oturumu.
+// Session is a signed-in browser session.
 type Session struct {
 	UserID    string
 	ExpiresAt time.Time
 }
 
-// Access, bir isteğin yetkilendirme bağlamıdır: kullanıcının hangi
-// uygulamaların verisini görebildiği ve neler yapabildiği.
+// Access is a request's authorization context: which applications' data the
+// user can see, and what they are allowed to do.
 //
-// Sorgu uçları ham kullanıcı yerine bunu kullanır; yetki kararı tek yerde
-// hesaplanır.
+// Query endpoints use this rather than the raw user, so the authorization
+// decision is computed in exactly one place.
 type Access struct {
 	User        *User
 	Permissions map[Permission]bool
-	// Projects, kullanıcının rol grupları üzerinden eriştiği projeler.
+	// Projects are the projects the user reaches through their role groups.
 	Projects []Project
-	// Applications, erişilebilen servis adlarının birleşimi.
+	// Applications is the union of reachable service names.
 	Applications []string
 }
 
-// Can, yetkiyi sorar. Süper yönetici her şeyi yapabilir.
+// Can asks whether a permission is held. A super administrator can do anything.
 func (a *Access) Can(p Permission) bool {
 	if a == nil || a.User == nil {
 		return false
@@ -172,13 +174,13 @@ func (a *Access) Can(p Permission) bool {
 	return a.Permissions[p]
 }
 
-// SeesEverything, telemetri sorgularının filtresiz çalışıp çalışmayacağını
-// söyler. Yalnızca süper yöneticiler için doğrudur.
+// SeesEverything says whether telemetry queries run unfiltered. True only for
+// super administrators.
 func (a *Access) SeesEverything() bool {
 	return a != nil && a.User != nil && a.User.IsSuperAdmin
 }
 
-// NormalizeServiceName, kullanıcıdan gelen uygulama adını temizler.
+// NormalizeServiceName cleans up an application name supplied by a user.
 func NormalizeServiceName(s string) string {
 	return strings.TrimSpace(s)
 }

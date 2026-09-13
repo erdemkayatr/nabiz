@@ -5,49 +5,49 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Nabiz.Agent;
 
 /// <summary>
-/// Kod seviyesi otomatik enstrümantasyon ayarları.
+/// Settings for automatic code-level instrumentation.
 /// </summary>
 public sealed class CodeLevelOptions
 {
     /// <summary>
-    /// Sarmalanacak tiplerin namespace önekleri. Boşsa giriş assembly'sinin
-    /// kök namespace'i kullanılır.
+    /// Namespace prefixes of the types to wrap. When empty, the entry
+    /// assembly's root namespace is used.
     /// </summary>
     public List<string> IncludeNamespaces { get; } = new();
 
-    /// <summary>Dışlanacak namespace önekleri.</summary>
+    /// <summary>Namespace prefixes to exclude.</summary>
     public List<string> ExcludeNamespaces { get; } = new();
 
-    /// <summary>Span başına ayrılan bellek ölçülsün mü.</summary>
+    /// <summary>Whether to measure memory allocated per span.</summary>
     public bool CaptureAllocations { get; set; } = true;
 
-    /// <summary>Thread kimliği ve async geçişi kaydedilsin mi.</summary>
+    /// <summary>Whether to record the thread id and async thread switch.</summary>
     public bool CaptureThread { get; set; } = true;
 
-    /// <summary>Metot parametrelerinin sayısı ve tipleri kaydedilsin mi.</summary>
+    /// <summary>Whether to record the count and types of method parameters.</summary>
     /// <remarks>
-    /// Yalnızca tipler; değerler asla kaydedilmez. Parametre değeri kişisel
-    /// veri, parola ya da jeton taşıyabilir.
+    /// Types only; values are never recorded. A parameter value can carry
+    /// personal data, a password or a token.
     /// </remarks>
     public bool CaptureParameterTypes { get; set; } = true;
 }
 
 /// <summary>
-/// DI'a kayıtlı servislerin metotlarını otomatik olarak ölçer.
+/// Automatically measures the methods of services registered in DI.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Dynatrace gibi araçlar CLR Profiler API'si ile çalışma anında IL'i yeniden
-/// yazar ve hiçbir işaret gerekmeden her metodu görür. Bu paket IL'e
-/// dokunmaz: bozuk IL üretmek, izlediği uygulamayı çökerten bir
-/// gözlemlenebilirlik aracı demektir.
+/// Tools like Dynatrace rewrite IL at runtime through the CLR Profiler API and
+/// see every method with no markup at all. This package does not touch IL:
+/// emitting broken IL means an observability tool that crashes the application
+/// it observes.
 /// </para>
 /// <para>
-/// Bunun yerine DI kayıtları sarmalanır. Arayüz üzerinden kayıtlı her servisin
-/// her metodu, kod değişikliği olmadan kendi span'ini alır. Karşılığında tek
-/// satır gerekir; <c>IHostingStartup</c> ile bunu da kaldırmak denendi ama
-/// çalışmıyor: hosting startup, uygulamanın kendi kayıtlarından önce çalışıyor
-/// ve sarmalanacak servisleri henüz göremiyor.
+/// Instead, the DI registrations are wrapped. Every method of every service
+/// registered through an interface gets its own span with no code change. The
+/// price is one line; removing even that with <c>IHostingStartup</c> was tried
+/// and does not work: hosting startup runs before the application's own
+/// registrations and cannot yet see the services to wrap.
 /// </para>
 /// </remarks>
 public static class NabizCodeLevel
@@ -55,29 +55,29 @@ public static class NabizCodeLevel
     internal const string SourceName = "Nabiz.Agent.Services";
     internal static readonly ActivitySource Source = new(SourceName);
 
-    // Çerçeve servislerini sarmalamak hem gürültü hem de risk: bazıları
-    // açılış sırasında çağrılır ve proxy'lenmeye uygun değildir.
+    // Wrapping framework services is both noise and risk: some are called
+    // during startup and are not suitable for proxying.
     private static readonly string[] AlwaysExcluded =
     {
         "System.", "Microsoft.", "OpenTelemetry.", "Nabiz.Agent.",
     };
 
     /// <summary>
-    /// Uygulamanın servislerini otomatik ölçmeye alır.
+    /// Puts the application's services under automatic measurement.
     /// </summary>
     /// <example>
     /// <code>
     /// var builder = WebApplication.CreateBuilder(args);
-    /// builder.Services.AddScoped&lt;ISepetServisi, SepetServisi&gt;();
-    /// builder.Services.AddNabizCodeLevel();   // kayıtlardan SONRA
+    /// builder.Services.AddScoped&lt;ICartService, CartService&gt;();
+    /// builder.Services.AddNabizCodeLevel();   // AFTER the registrations
     /// </code>
     /// </example>
     public static IServiceCollection AddNabizCodeLevel(
         this IServiceCollection services, Action<CodeLevelOptions>? configure = null)
     {
-        // Önce nabiz.json'daki codeLevel bölümü, sonra koddaki callback.
-        // Kod son sözü söyler: derleyicinin gördüğü ayar, dosyadakinden daha
-        // açık bir niyettir.
+        // First the codeLevel section of nabiz.json, then the callback in
+        // code. Code has the last word: a setting the compiler sees is a
+        // clearer statement of intent than one in a file.
         var settings = NabizAgent.Options?.CodeLevel ?? new NabizOptions.CodeLevelSettings();
         var options = new CodeLevelOptions
         {
@@ -91,7 +91,7 @@ public static class NabizCodeLevel
 
         if (!settings.Enabled)
         {
-            Log("kod seviyesi ölçümü yapılandırmada kapalı");
+            Log("code-level measurement is disabled in the configuration");
             return services;
         }
 
@@ -104,7 +104,7 @@ public static class NabizCodeLevel
         var wrapped = 0;
         var skippedClasses = new List<string>();
 
-        // Listeyi dolaşırken değiştirdiğimiz için kopya üzerinden gidiyoruz.
+        // We modify the list while walking it, so we iterate over a copy.
         foreach (var descriptor in services.ToList())
         {
             if (IsClassRegistrationInScope(descriptor, options))
@@ -116,22 +116,22 @@ public static class NabizCodeLevel
             if (Replace(services, descriptor, options)) wrapped++;
         }
 
-        Log($"{wrapped} servis sarmalandı (namespace: {string.Join(", ", options.IncludeNamespaces)})");
+        Log($"wrapped {wrapped} services (namespaces: {string.Join(", ", options.IncludeNamespaces)})");
 
-        // Sessizce atlamak yerine söylüyoruz: "neden bu servisin metotlarını
-        // göremiyorum" sorusunun cevabı loglarda dursun.
+        // Say it rather than skipping quietly: the answer to "why can't I see
+        // this service's methods" should be in the log.
         if (skippedClasses.Count > 0)
         {
             Console.Error.WriteLine(
-                $"[nabiz] {skippedClasses.Count} servis sınıf olarak kayıtlı olduğu için ölçülemedi: " +
-                $"{string.Join(", ", skippedClasses.Take(10))}" +
+                $"[nabiz] {skippedClasses.Count} services could not be measured because they " +
+                $"are registered as concrete classes: {string.Join(", ", skippedClasses.Take(10))}" +
                 (skippedClasses.Count > 10 ? " …" : "") +
-                ". Arayüz üzerinden kaydedin ya da IL weaving sürümünü bekleyin.");
+                ". Register them through an interface, or wait for the IL weaving release.");
         }
         return services;
     }
 
-    // Kapsamdaki ama arayüzsüz kayıtlar: proxy kurulamaz.
+    // Registrations in scope but without an interface: no proxy can be built.
     private static bool IsClassRegistrationInScope(ServiceDescriptor d, CodeLevelOptions options)
     {
         if (d.ServiceType.IsInterface) return false;
@@ -144,7 +144,7 @@ public static class NabizCodeLevel
 
     private static void Log(string message)
     {
-        if (NabizAgent.Options?.Debug == true) Console.WriteLine($"[nabiz] kod seviyesi: {message}");
+        if (NabizAgent.Options?.Debug == true) Console.WriteLine($"[nabiz] code level: {message}");
     }
 
     private static string? RootNamespace()
@@ -157,9 +157,10 @@ public static class NabizCodeLevel
 
     private static bool ShouldWrap(ServiceDescriptor d, CodeLevelOptions options)
     {
-        // DispatchProxy yalnızca arayüzleri sarmalayabilir. Sınıf olarak
-        // kayıtlı servisler için sanal metot proxy'si gerekirdi; o da ancak
-        // metotlar virtual ise çalışır ve sessizce eksik ölçüm üretir.
+        // DispatchProxy can only wrap interfaces. Services registered as
+        // concrete classes would need a virtual-method proxy, which only works
+        // when the methods are virtual and otherwise measures incompletely
+        // without saying so.
         if (!d.ServiceType.IsInterface || d.ServiceType.IsGenericTypeDefinition) return false;
 
         var target = d.ImplementationType ?? d.ImplementationInstance?.GetType();
@@ -190,9 +191,9 @@ public static class NabizCodeLevel
         }
         catch (Exception ex)
         {
-            // Tek bir servisin sarmalanamaması, uygulamanın açılmamasına yol
-            // açmamalı. Atlanır ve devam edilir.
-            Console.Error.WriteLine($"[nabiz] {d.ServiceType.Name} sarmalanamadı, atlandı: {ex.Message}");
+            // One service failing to wrap must not stop the application from
+            // starting. It is skipped and we carry on.
+            Console.Error.WriteLine($"[nabiz] could not wrap {d.ServiceType.Name}, skipped: {ex.Message}");
             return false;
         }
     }

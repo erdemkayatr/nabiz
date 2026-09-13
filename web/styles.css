@@ -1,6 +1,6 @@
-/* Tek dosya, sıfır bağımlılık: arayüz collector ile aynı ağda, internet
-   erişimi olmayan bir kümede de açılabilmeli. Bu yüzden CDN yok — kuvvet
-   simülasyonu da dahil her şey elde yazıldı. */
+/* One file, zero dependencies: the UI has to open in a cluster that shares a
+   network with the collector but has no internet access. So no CDN — including
+   the force simulation, everything is hand-written. */
 :root {
   --bg: #f7f8fa; --panel: #ffffff; --panel-2: #f1f3f6;
   --canvas: #fbfcfd; --grid: #e8ecf1; --border: #dfe3e9;
@@ -36,9 +36,9 @@
 
 * { box-sizing: border-box; }
 
-/* Bu dosyada display tanımlayan çok sayıda kural var (header flex,
-   .dialog-backdrop grid, #login-screen grid). Hepsi tarayıcının varsayılan
-   [hidden] kuralını eziyor; tek bir global kural bunu kapatıyor. */
+/* This file has plenty of rules that set display (header flex,
+   .dialog-backdrop grid, #login-screen grid). All of them override the
+   browser's default [hidden] rule; one global rule shuts that down. */
 [hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
@@ -83,7 +83,7 @@ main { padding: 18px; max-width: 1400px; margin: 0 auto; }
 /* --- topoloji tuvali --- */
 #canvas-wrap {
   position: relative; height: 620px; overflow: hidden;
-  /* Düğüm sürüklerken sayfa metnini seçmesin. */
+  /* Do not select page text while dragging a node. */
   user-select: none; -webkit-user-select: none;
   background:
     linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 28px 28px,
@@ -118,7 +118,7 @@ main { padding: 18px; max-width: 1400px; margin: 0 auto; }
 .node, .link, .flow { transition: opacity .18s; }
 .dimmed { opacity: .12; }
 
-/* --- düğüm/kenar detay paneli --- */
+/* --- node/edge detail panel --- */
 #detail {
   position: absolute; top: 12px; right: 12px; z-index: 4; width: 286px;
   max-height: calc(100% - 24px); overflow: auto;
@@ -166,7 +166,7 @@ tbody tr.clickable:hover { background: var(--panel-2); }
 .empty, .error { padding: 34px 18px; text-align: center; color: var(--text-dim); }
 .error { color: var(--err); }
 
-/* --- trace şelalesi --- */
+/* --- trace waterfall --- */
 .wf-row { display: flex; align-items: center; gap: 10px; padding: 3px 15px; border-bottom: 1px solid var(--border); }
 .wf-row:hover { background: var(--panel-2); }
 .wf-name { flex: 0 0 46%; display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -188,7 +188,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
   .dot { animation: none; }
   .flow { display: none; }
 }
-/* ==================== GİRİŞ ==================== */
+/* ==================== LOGIN ==================== */
 #login-screen {
   position: fixed; inset: 0; display: grid; place-items: center;
   background: var(--bg); padding: 24px; overflow: auto;
@@ -244,7 +244,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .check-hint { display: block; color: var(--text-dim); font-size: 12px; }
 .check-row.standalone { border: 1px solid var(--border); margin-bottom: 12px; }
 
-/* ==================== DİYALOG ==================== */
+/* ==================== DIALOG ==================== */
 .dialog-backdrop {
   position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
   background: rgba(0,0,0,.45); padding: 24px; overflow: auto;
@@ -267,7 +267,7 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
   padding: 14px 18px; border-top: 1px solid var(--border);
 }
 
-/* ==================== KULLANICI MENÜSÜ ==================== */
+/* ==================== USER MENU ==================== */
 .user-wrap { position: relative; }
 .user-chip {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
@@ -300,14 +300,14 @@ label.check { display: inline-flex; align-items: center; gap: 6px; cursor: point
 .menu-item:hover { background: var(--panel-2); }
 .menu-item.danger { color: var(--err); }
 
-/* ==================== PROJE SEÇİCİ ==================== */
+/* ==================== PROJECT SELECTOR ==================== */
 #project-wrap select { font-weight: 600; }
 .single-project {
   display: inline-block; padding: 5px 11px; border-radius: 6px;
   background: var(--panel-2); border: 1px solid var(--border); font-weight: 600; font-size: 13px;
 }
 
-/* ==================== YÖNETİM ==================== */
+/* ==================== ADMINISTRATION ==================== */
 .subtabs { display: flex; gap: 2px; }
 .subtabs button {
   background: none; border: 0; padding: 5px 12px; border-radius: 6px;
@@ -328,7 +328,7 @@ td.actions { white-space: nowrap; }
 .link-btn.danger { color: var(--err); }
 .tag.admin-tag { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 
-/* ==================== KOD SEVİYESİ / ZAMANLAMA ==================== */
+/* ==================== CODE LEVEL / TIMING ==================== */
 .wf-bar.total { opacity: .3; }
 .wf-bar.self { opacity: 1; }
 .wf-dur { flex: 0 0 108px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
@@ -360,7 +360,7 @@ pre.stack {
 .hotspot-bar { height: 100%; background: var(--accent); border-radius: 5px; }
 .hotspot-val { flex: 0 0 108px; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; font-variant-numeric: tabular-nums; }
 
-/* ==================== SÜRE KIRILIMI ==================== */
+/* ==================== DURATION BREAKDOWN ==================== */
 .breakdown { border-bottom: 1px solid var(--border); padding: 12px 15px 14px 15px; }
 .bd-bar { display: flex; height: 13px; border-radius: 7px; overflow: hidden; background: var(--panel-2); }
 .bd-seg { height: 100%; }
@@ -390,7 +390,7 @@ a.link-btn { text-decoration: none; display: inline-block; }
 .bd-seg.storage-warn { background: var(--warn); }
 .bd-seg.storage-err { background: var(--err); }
 
-/* ==================== DUMP İLERLEME ==================== */
+/* ==================== DUMP PROGRESS ==================== */
 .dialog.capture { max-width: 430px; }
 .cap-target { margin-bottom: 12px; }
 .cap-state { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 14px; margin-bottom: 12px; }
@@ -400,9 +400,9 @@ a.link-btn { text-decoration: none; display: inline-block; }
 .btn.danger-btn { background: var(--err); border-color: var(--err); color: #fff; font-weight: 600; }
 .btn.danger-btn:hover { filter: brightness(1.08); }
 .spinner {
-  /* inline-block şart: satır içinde kullanıldığında salt "inline" bir öğe
-     genişlik/yükseklik almaz ve çember 4 piksellik bir çizgiye iner.
-     Flex kapsayıcı içinde zaten bloğa dönüştürülüyor, orada da sorun yok. */
+  /* inline-block is required: used inline, a plain "inline" element takes no
+     width or height and the circle collapses into a 4px line. Inside a flex
+     container it is blockified anyway, so it is fine there too. */
   display: inline-block; vertical-align: -2px; margin-right: 8px;
   width: 14px; height: 14px; flex: 0 0 auto; border-radius: 50%;
   border: 2px solid var(--border); border-top-color: var(--accent);

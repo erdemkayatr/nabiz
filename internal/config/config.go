@@ -1,6 +1,6 @@
-// Package config, ortam değişkeninden yapılandırma okur. Dosya tabanlı config
-// yok: collector bir container olarak çalışacak ve k8s'te ConfigMap zaten
-// ortam değişkenine dönüşüyor.
+// Package config reads configuration from environment variables. There is no
+// file-based config: the collector runs as a container, and in Kubernetes a
+// ConfigMap already turns into environment variables.
 package config
 
 import (
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// String, NABIZ_<key> ortam değişkenini okur.
+// String reads the NABIZ_<key> environment variable.
 func String(key, def string) string {
 	if v, ok := os.LookupEnv("NABIZ_" + key); ok && v != "" {
 		return v
@@ -18,7 +18,7 @@ func String(key, def string) string {
 	return def
 }
 
-// Int, sayısal ayar okur.
+// Int reads a numeric setting.
 func Int(key string, def int) int {
 	if v, ok := os.LookupEnv("NABIZ_" + key); ok {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -28,7 +28,7 @@ func Int(key string, def int) int {
 	return def
 }
 
-// Bool, "1", "true", "yes" değerlerini doğru kabul eder.
+// Bool treats "1", "true" and "yes" as true.
 func Bool(key string, def bool) bool {
 	if v, ok := os.LookupEnv("NABIZ_" + key); ok {
 		switch strings.ToLower(v) {
@@ -41,7 +41,7 @@ func Bool(key string, def bool) bool {
 	return def
 }
 
-// Duration, "15s", "2m" gibi değerleri okur.
+// Duration reads values such as "15s" or "2m".
 func Duration(key string, def time.Duration) time.Duration {
 	if v, ok := os.LookupEnv("NABIZ_" + key); ok {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -51,7 +51,7 @@ func Duration(key string, def time.Duration) time.Duration {
 	return def
 }
 
-// StringSlice, virgülle ayrılmış listeyi okur.
+// StringSlice reads a comma-separated list.
 func StringSlice(key string, def []string) []string {
 	if v, ok := os.LookupEnv("NABIZ_" + key); ok && v != "" {
 		parts := strings.Split(v, ",")

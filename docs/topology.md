@@ -1,64 +1,69 @@
-# Topoloji nasıl çıkarılıyor
+# How the topology is derived
 
-Bu belge, `internal/topology` paketindeki kararların gerekçesini anlatır.
+🇹🇷 [Türkçe](topoloji.md)
 
-## Sorun
+This document explains the reasoning behind the decisions in the
+`internal/topology` package.
 
-Bir servis haritası çizmek için "A servisi B servisini çağırıyor" bilgisine
-ihtiyaç var. Bu bilgi hiçbir tek span'de yazmaz:
+## The problem
 
-- Çağıran serviste bir `CLIENT` span'i vardır ve hedefin **adını** bilmez —
-  yalnızca `http://backend:8080` gibi bir adres bilir.
-- Çağrılan serviste bir `SERVER` span'i vardır ve çağıranın **adını** bilmez.
+Drawing a service map needs the fact that "service A calls service B". That fact
+is written in no single span:
 
-İkisini birleştiren tek şey, `SERVER` span'inin `parent_span_id` alanının
-`CLIENT` span'inin `span_id` alanına eşit olmasıdır.
+- The calling service has a `CLIENT` span, and it does not know the target's
+  **name** — only an address like `http://backend:8080`.
+- The called service has a `SERVER` span, and it does not know the caller's
+  **name**.
 
-## Çözüm: iki nesilli eşleştirme tablosu
+The only thing joining the two is that the `SERVER` span's `parent_span_id`
+equals the `CLIENT` span's `span_id`.
 
-Gelen her `CLIENT` ve `SERVER` span'i, `span_id`'ye göre parçalanmış
-(sharded) bir tabloya yazılır. Eşi zaten oradaysa kenar üretilir ve iki kayıt
-da silinir.
+## The solution: a two-generation pairing table
 
-Eş hiç gelmeyebilir: hedef enstrümante değildir, ya da hedef zaten bir
-veritabanıdır. Bu kayıtların süresiz birikmemesi gerekir.
+Every incoming `CLIENT` and `SERVER` span is written into a table sharded by
+`span_id`. If its pair is already there, an edge is produced and both records
+are removed.
 
-Klasik çözüm her kayda son kullanma zamanı yazıp periyodik olarak taramaktır;
-bu, tablo büyüdükçe pahalılaşır. Bunun yerine her shard'da **iki nesil** map
-tutulur:
+The pair may never arrive: the target is not instrumented, or the target is a
+database. Those records must not pile up forever.
+
+The classic answer is to stamp each record with an expiry and scan periodically,
+which gets more expensive as the table grows. Instead, each shard keeps **two
+generations** of map:
 
 ```
-lookup  : önce cur'a, sonra prev'e bak
-rotasyon: prev'i at, cur'u prev yap, yeni cur aç   (TTL/2'de bir)
+lookup  : check cur, then prev
+rotation: discard prev, cur becomes prev, open a new cur   (every TTL/2)
 ```
 
-Silme maliyeti O(1), bellek üst sınırı serbest, kayıtlar TTL/2 ile TTL
-arasında yaşar. Atılan nesildeki eşleşmemiş `CLIENT` span'leri kaybedilmez:
-hedef adı span attribute'larından türetilip dış bağımlılık kenarına çevrilir.
+Eviction costs O(1), the memory ceiling takes care of itself, and records live
+between TTL/2 and TTL. Unpaired `CLIENT` spans in the discarded generation are
+not lost: the target name is derived from the span attributes and turned into an
+external-dependency edge.
 
-## Hedef adının türetilmesi
+## Deriving the target name
 
-Sıra, en açıklayıcı isimden en genele:
+In order, from the most descriptive to the most generic:
 
-| Öncelik | Kaynak | Örnek sonuç |
+| Priority | Source | Example result |
 |---|---|---|
 | 1 | `db.system` + `db.namespace` | `postgresql:orders` |
-| 2 | `messaging.system` + hedef | `rabbitmq:siparis-kuyrugu` |
-| 3 | `peer.service` | `odeme-servisi` |
+| 2 | `messaging.system` + destination | `rabbitmq:order-queue` |
+| 3 | `peer.service` | `payment-service` |
 | 4 | `rpc.service` | `Shop.Orders.V1` |
 | 5 | `server.address` + port | `api.stripe.com:443` |
 
-## Toplama
+## Aggregation
 
-Kenarlar ham olarak yazılmaz. Dakika kovalarında, kenar kimliği başına
-toplanır: çağrı sayısı, hata sayısı, süre toplamı, süre maksimumu ve 14
-kovalı bir gecikme histogramı.
+Edges are not written raw. They are aggregated per edge identity into one-minute
+buckets: call count, error count, duration sum, duration maximum, and a
+14-bucket latency histogram.
 
-Yerel testte 2605 span, 27 kenar satırına indi. Yazma hacmi istek hacmiyle
-değil, topolojinin karmaşıklığıyla büyür — bir APM'in ölçeklenebilmesi için
-gereken şey tam olarak budur.
+In a local test, 2605 spans came down to 27 edge rows. Write volume grows with
+the complexity of the topology, not with request volume — which is exactly what
+an APM needs in order to scale.
 
-## Kenar kimliğinde ne var
+## What is in the edge identity
 
 ```go
 type EdgeKey struct {
@@ -70,15 +75,25 @@ type EdgeKey struct {
 }
 ```
 
-Kubernetes boyutları kenarın üstünde taşındığı için aynı veriden üç farklı
-grafik çizilebilir: servis, deployment ve namespace seviyesi. Node boyutu
-varsayılan olarak kapalıdır; açmak node'lar arası trafiği görünür kılar ama
-kenar kardinalitesini node sayısı kadar çarpar.
+Because the Kubernetes dimensions ride on the edge, three different graphs can
+be drawn from the same data: service, deployment and namespace level. The node
+dimension is off by default; turning it on makes node-to-node traffic visible
+but multiplies edge cardinality by the number of nodes.
 
-## Neden gecikme sunucu tarafından alınıyor
+## Why latency comes from the server side
 
-Eşleşmiş bir çiftte iki süre vardır: istemcinin gördüğü ve sunucunun
-harcadığı. İstemcininki ağ gecikmesini ve bağlantı havuzu beklemesini de
-içerir. Servis grafiğinde aranan "B servisi ne kadar yavaş" olduğu için
-sunucu tarafı kullanılır; istemci tarafı yalnızca sunucu span'i yoksa devreye
-girer.
+A matched pair has two durations: what the client saw, and what the server
+spent. The client's includes network latency and connection pool wait. What a
+service graph is asking is "how slow is service B", so the server side is used;
+the client side only steps in when there is no server span.
+
+## The cost
+
+Measured on an Apple M4 Pro:
+
+```
+BenchmarkObserve-14    38510395    93.42 ns/op    0 B/op    0 allocs/op
+```
+
+93 ns per span and zero allocations. In practice the bottleneck is ClickHouse
+write throughput, not this calculation.

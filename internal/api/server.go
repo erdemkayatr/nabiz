@@ -1,8 +1,8 @@
-// Package api, ClickHouse üstündeki sorgu ucunu sunar.
+// Package api serves the query endpoint on top of ClickHouse.
 //
-// Sorguların tamamı önceden toplanmış tablolara (operation_stats,
-// service_edges, trace_index) gider; ham spans tablosuna yalnızca tek bir
-// trace'in detayı istendiğinde ve daraltılmış zaman aralığıyla inilir.
+// Every query goes to a pre-aggregated table (operation_stats, service_edges,
+// trace_index); the raw spans table is only touched when a single trace's
+// detail is requested, and then with a narrowed time range.
 package api
 
 import (
@@ -23,25 +23,25 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/topology"
 )
 
-// Server, HTTP sorgu ucudur.
+// Server is the HTTP query endpoint.
 type Server struct {
 	conn     driver.Conn
 	db       string
 	identity *identity.Store
 	logins   *loginLimiter
-	// dumpDir, uygulamalardan çekilen dump dosyalarının tutulduğu dizin.
+	// dumpDir is where dump files fetched from applications are kept.
 	dumpDir   string
 	retention DumpRetention
-	// inflight, koşan dump işlemlerinin iptal fonksiyonları.
+	// inflight holds the cancel functions of running dump jobs.
 	inflight   map[string]context.CancelFunc
 	inflightMu sync.Mutex
 	log        *slog.Logger
 }
 
-// SetDumpRetention, saklama kurallarını değiştirir.
+// SetDumpRetention replaces the retention rules.
 func (s *Server) SetDumpRetention(r DumpRetention) { s.retention = r }
 
-// New, sorgu sunucusunu kurar.
+// New builds the query server.
 func New(conn driver.Conn, db string, ident *identity.Store, dumpDir string, log *slog.Logger) *Server {
 	return &Server{
 		conn:      conn,
@@ -50,51 +50,51 @@ func New(conn driver.Conn, db string, ident *identity.Store, dumpDir string, log
 		dumpDir:   dumpDir,
 		retention: DefaultDumpRetention(),
 		inflight:  map[string]context.CancelFunc{},
-		// Beş dakikada on başarısız deneme: insan için bol, sözlük saldırısı
-		// için işe yaramaz.
+		// Ten failed attempts per five minutes: generous for a human, useless
+		// for a dictionary attack.
 		logins: newLoginLimiter(10, 5*time.Minute),
 		log:    log,
 	}
 }
 
-// Handler, rotaları kurar.
+// Handler wires up the routes.
 //
-// /healthz dışındaki her uç oturum ister. Telemetri uçları ayrıca yetki
-// kontrolünden geçer ve yalnızca kullanıcının projelerine atanmış
-// uygulamaların verisini döndürür.
+// Every endpoint except /healthz requires a session. Telemetry endpoints also
+// go through a permission check and only return data for applications assigned
+// to the user's projects.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// --- kimlik ---
+	// --- identity ---
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/auth/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/auth/password", requireAuth(s.handleChangeOwnPassword))
 
-	// --- telemetri ---
+	// --- telemetry ---
 	mux.HandleFunc("GET /api/v1/services", requirePermission(permServices, s.handleServices))
 	mux.HandleFunc("GET /api/v1/operations", requirePermission(permServices, s.handleOperations))
 	mux.HandleFunc("GET /api/v1/topology", requirePermission(permTopology, s.handleTopology))
 	mux.HandleFunc("GET /api/v1/traces", requirePermission(permTraces, s.handleTraceSearch))
 	mux.HandleFunc("GET /api/v1/traces/{traceID}", requirePermission(permTraces, s.handleTraceDetail))
 
-	// --- denetim düzlemi ---
+	// --- control plane ---
 	s.registerAdmin(mux)
 	s.registerDiagnostics(mux)
 
-	// Arayüz API ile aynı binary'den ve aynı kaynaktan sunulur.
+	// The UI is served from the same binary and the same origin as the API.
 	if err := registerUI(mux); err != nil {
-		s.log.Error("arayüz bağlanamadı, yalnızca API sunuluyor", "err", err)
+		s.log.Error("could not mount the UI, serving the API only", "err", err)
 	}
 	return s.withSession(mux)
 }
 
-// --- servisler ---
+// --- services ---
 
-// ServiceSummary, bir servisin RED özeti.
+// ServiceSummary is a service's RED summary.
 type ServiceSummary struct {
 	Service    string  `json:"service"`
 	Namespace  string  `json:"namespace,omitempty"`
@@ -117,8 +117,8 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Servis seviyesindeki hız/hata, yalnızca giriş span'lerinden (server /
-	// consumer) hesaplanır; aksi halde her iç çağrı ikinci kez sayılır.
+	// Service-level rate and errors are computed from entry spans only (server
+	// / consumer); otherwise every internal call would be counted twice.
 	sc := scopeFor(r)
 	if sc.empty() {
 		writeJSON(w, map[string]any{"from": from, "to": to, "services": []ServiceSummary{}})
@@ -179,9 +179,9 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"from": from, "to": to, "services": out})
 }
 
-// --- işlemler ---
+// --- operations ---
 
-// OperationSummary, servis içindeki tek bir işlemin RED özeti.
+// OperationSummary is the RED summary of a single operation within a service.
 type OperationSummary struct {
 	Service   string  `json:"service"`
 	Operation string  `json:"operation"`
@@ -202,11 +202,11 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	}
 	service := r.URL.Query().Get("service")
 	if service == "" {
-		writeError(w, http.StatusBadRequest, errors.New("service parametresi zorunlu"))
+		writeError(w, http.StatusBadRequest, errors.New("the service parameter is required"))
 		return
 	}
-	// Kapsam dışı bir servis için 403 dönmek, o servisin var olduğunu ele
-	// verir. Boş sonuç döndürmek hem güvenli hem yeterli.
+	// Returning 403 for an out-of-scope service reveals that the service
+	// exists. An empty result is both safe and sufficient.
 	if sc := scopeFor(r); !sc.allows(service) {
 		writeJSON(w, map[string]any{"from": from, "to": to, "operations": []OperationSummary{}})
 		return
@@ -260,9 +260,9 @@ func (s *Server) handleOperations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"from": from, "to": to, "operations": out})
 }
 
-// --- topoloji ---
+// --- topology ---
 
-// Node, topoloji grafiğindeki bir düğüm.
+// Node is a node in the topology graph.
 type Node struct {
 	ID        string  `json:"id"`
 	Label     string  `json:"label"`
@@ -274,7 +274,7 @@ type Node struct {
 	ErrorRate float64 `json:"errorRate"`
 }
 
-// Edge, iki düğüm arasındaki çağrı ilişkisi.
+// Edge is the call relationship between two nodes.
 type Edge struct {
 	Source    string  `json:"source"`
 	Target    string  `json:"target"`
@@ -295,9 +295,9 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// level=service  -> servis adına göre (varsayılan)
-	// level=workload -> k8s deployment/statefulset'e göre
-	// level=namespace-> k8s namespace'ine göre
+	// level=service   -> group by service name (default)
+	// level=workload  -> group by k8s deployment/statefulset
+	// level=namespace -> group by k8s namespace
 	level := r.URL.Query().Get("level")
 	clientExpr, serverExpr := groupExprs(level)
 
@@ -407,9 +407,9 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// groupExprs, topoloji seviyesine göre gruplama ifadelerini verir.
-// Veritabanı/kuyruk gibi k8s'te karşılığı olmayan uçlar her seviyede kendi
-// adıyla kalır; aksi halde grafikten düşerlerdi.
+// groupExprs returns the grouping expressions for a topology level.
+// Endpoints with no Kubernetes counterpart — databases, queues — keep their own
+// name at every level; otherwise they would drop out of the graph.
 func groupExprs(level string) (client, server string) {
 	switch level {
 	case "workload":
@@ -447,9 +447,9 @@ func upsertNode(nodes map[string]*Node, id, typ, ns, wl string) *Node {
 	return n
 }
 
-// --- trace arama ---
+// --- trace search ---
 
-// TraceSummary, trace listesindeki bir satır.
+// TraceSummary is one row in the trace list.
 type TraceSummary struct {
 	TraceID     string    `json:"traceId"`
 	RootService string    `json:"rootService"`
@@ -478,8 +478,8 @@ func (s *Server) handleTraceSearch(w http.ResponseWriter, r *http.Request) {
 	where := []string{"start >= ? AND start < ?"}
 	args := []any{from, to}
 	if filter, filterArgs := sc.filterTraces(); filter != "" {
-		// filterTraces " AND ..." döndürüyor; burada listeye eklendiği için
-		// baştaki ek kaldırılır.
+		// filterTraces returns " AND ..."; the prefix is stripped because it
+		// is appended to a list here.
 		where = append(where, strings.TrimPrefix(filter, " AND "))
 		args = append(args, filterArgs...)
 	}
@@ -491,7 +491,7 @@ func (s *Server) handleTraceSearch(w http.ResponseWriter, r *http.Request) {
 	if v := qp.Get("minDurationMs"); v != "" {
 		ms, convErr := strconv.ParseFloat(v, 64)
 		if convErr != nil {
-			writeError(w, http.StatusBadRequest, errors.New("minDurationMs sayı olmalı"))
+			writeError(w, http.StatusBadRequest, errors.New("minDurationMs must be a number"))
 			return
 		}
 		where = append(where, "duration_ns >= ?")
@@ -557,16 +557,16 @@ func (s *Server) handleTraceSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"from": from, "to": to, "traces": out})
 }
 
-// --- trace detayı ---
+// --- trace detail ---
 
-// SpanEvent, span üzerindeki bir olay (çoğunlukla istisna).
+// SpanEvent is an event on a span, usually an exception.
 type SpanEvent struct {
 	Timestamp  time.Time         `json:"timestamp"`
 	Name       string            `json:"name"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
-// CodeLocation, span'in geldiği kaynak konumu.
+// CodeLocation is the source location a span came from.
 type CodeLocation struct {
 	Function   string `json:"function,omitempty"`
 	File       string `json:"file,omitempty"`
@@ -575,7 +575,7 @@ type CodeLocation struct {
 	StackTrace string `json:"stackTrace,omitempty"`
 }
 
-// SpanView, trace detayındaki tek bir span.
+// SpanView is a single span in the trace detail.
 type SpanView struct {
 	SpanID       string    `json:"spanId"`
 	ParentSpanID string    `json:"parentSpanId,omitempty"`
@@ -588,8 +588,8 @@ type SpanView struct {
 	Node         string    `json:"node,omitempty"`
 	Start        time.Time `json:"start"`
 	DurationMS   float64   `json:"durationMs"`
-	// SelfMS, bu span'de geçen ama çocuklarında geçmeyen süre. Bir isteğin
-	// nerede yavaşladığını toplam süre değil bu sayı söyler.
+	// SelfMS is the time spent in this span but not in its children. Where a
+	// request is slow is answered by this number, not by the total.
 	SelfMS     float64           `json:"selfMs"`
 	Status     string            `json:"status"`
 	StatusMsg  string            `json:"statusMessage,omitempty"`
@@ -598,7 +598,7 @@ type SpanView struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
-// TimeSlice, trace süresinin bir kırılım dilimi.
+// TimeSlice is one slice of the trace's duration breakdown.
 type TimeSlice struct {
 	Key   string  `json:"key"`
 	MS    float64 `json:"ms"`
@@ -606,7 +606,7 @@ type TimeSlice struct {
 	Count int     `json:"count"`
 }
 
-// Hotspot, trace içindeki toplam self time'a göre en pahalı işlemler.
+// Hotspot is one of the most expensive operations in a trace by total self time.
 type Hotspot struct {
 	Name    string        `json:"name"`
 	Service string        `json:"service"`
@@ -620,21 +620,21 @@ type Hotspot struct {
 func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 	traceID := r.PathValue("traceID")
 	if len(traceID) != 32 {
-		writeError(w, http.StatusBadRequest, errors.New("traceID 32 hex karakter olmalı"))
+		writeError(w, http.StatusBadRequest, errors.New("traceID must be 32 hex characters"))
 		return
 	}
 
 	sc := scopeFor(r)
 	if sc.empty() {
-		writeErrorCode(w, http.StatusNotFound, "trace bulunamadı", "not_found")
+		writeErrorCode(w, http.StatusNotFound, "trace not found", "not_found")
 		return
 	}
 
-	// Önce indeksten zaman aralığını al: spans tablosunda partition budaması
-	// yapabilmek için. İndekssiz sorgu tüm günleri tarardı.
+	// Get the time range from the index first, so the spans table can be
+	// partition-pruned. Without the index the query would scan every day.
 	//
-	// Aynı sorgu erişim kontrolünü de yapar: trace'in servislerinden en az
-	// biri kapsamda değilse trace hiç bulunamamış sayılır.
+	// The same query also performs the access check: if none of the trace's
+	// services is in scope, the trace counts as not found at all.
 	filter, filterArgs := sc.filterTraces()
 	var start, end time.Time
 	idxQ := fmt.Sprintf(
@@ -642,7 +642,7 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		s.db, filter)
 	if err := s.conn.QueryRow(r.Context(), idxQ,
 		append([]any{traceID}, filterArgs...)...).Scan(&start, &end); err != nil {
-		writeErrorCode(w, http.StatusNotFound, "trace bulunamadı", "not_found")
+		writeErrorCode(w, http.StatusNotFound, "trace not found", "not_found")
 		return
 	}
 
@@ -714,15 +714,16 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Self time'ı burada hesaplıyoruz, istemcide değil: her istemcinin aynı
-	// aritmetiği tekrar yazması hem israf hem de tutarsızlık kaynağı.
+	// Self time is computed here rather than on the client: every client
+	// re-implementing the same arithmetic is both waste and a source of
+	// inconsistency.
 	for i := range out {
 		self := durations[out[i].SpanID]
 		if children := childSum[out[i].SpanID]; children < self {
 			self -= children
 		} else {
-			// Paralel çocuklar toplamda ebeveynden uzun sürebilir; negatif
-			// self time anlamsız olacağı için sıfıra kırpılır.
+			// Parallel children can add up to more than the parent; a negative
+			// self time would be meaningless, so it is clamped to zero.
 			self = 0
 		}
 		out[i].SelfMS = nsToMS(float64(self))
@@ -733,15 +734,16 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		"traceId":  traceID,
 		"spans":    out,
 		"hotspots": buildHotspots(out),
-		// Sürenin nerede geçtiği: kendi kodda mı, veritabanında mı, başka bir
-		// servise giden çağrıda mı.
+		// Where the time went: own code, the database, or a call out to
+		// another service.
 		"breakdown": byCategory,
 		"byService": byService,
 	})
 }
 
-// codeLocationOf, span attribute'larından kod konumunu çıkarır.
-// Hem güncel (code.function.name) hem eski (code.function) adlar okunur.
+// codeLocationOf extracts the code location from a span's attributes.
+// Both the current (code.function.name) and the legacy (code.function) names
+// are read.
 func codeLocationOf(attrs map[string]string) *CodeLocation {
 	if len(attrs) == 0 {
 		return nil
@@ -769,7 +771,7 @@ func codeLocationOf(attrs map[string]string) *CodeLocation {
 	return &loc
 }
 
-// buildEvents, ClickHouse'un paralel dizilerini olay listesine çevirir.
+// buildEvents turns ClickHouse's parallel arrays into a list of events.
 func buildEvents(times []time.Time, names []string, attrs []map[string]string) []SpanEvent {
 	if len(names) == 0 {
 		return nil
@@ -788,11 +790,11 @@ func buildEvents(times []time.Time, names []string, attrs []map[string]string) [
 	return events
 }
 
-// categoryOf, span'in süresinin hangi kırılıma yazılacağını söyler.
+// categoryOf says which breakdown slice a span's time belongs to.
 //
-// Kendi süresi (self time) üzerinden çalışır, bu yüzden diliımlerin toplamı
-// trace'in toplam süresine eşittir. Toplam süre üzerinden hesaplasaydık
-// iç içe span'ler birden çok kez sayılırdı.
+// It works on self time, which is why the slices add up to the trace's total
+// duration. Computing on total duration would count nested spans more than
+// once.
 func categoryOf(s *SpanView) string {
 	a := s.Attributes
 	switch {
@@ -801,8 +803,8 @@ func categoryOf(s *SpanView) string {
 	case a["messaging.system"] != "":
 		return "messaging"
 	case s.Kind == "client" || s.Kind == "producer":
-		// Dışa giden çağrı: hedef servis enstrümante olsa bile burada geçen
-		// süre ağ ve bekleme süresidir.
+		// An outbound call: even when the target service is instrumented, the
+		// time spent here is network and wait time.
 		return "outbound"
 	case s.Kind == "internal":
 		return "code"
@@ -811,7 +813,7 @@ func categoryOf(s *SpanView) string {
 	}
 }
 
-// buildBreakdown, süreyi kategoriye ve servise göre böler.
+// buildBreakdown splits the duration by category and by service.
 func buildBreakdown(spans []SpanView) ([]TimeSlice, []TimeSlice) {
 	cat := map[string]*TimeSlice{}
 	svc := map[string]*TimeSlice{}
@@ -851,12 +853,12 @@ func buildBreakdown(spans []SpanView) ([]TimeSlice, []TimeSlice) {
 	return flatten(cat), flatten(svc)
 }
 
-// buildHotspots, self time'a göre en pahalı işlemleri özetler.
+// buildHotspots summarises the most expensive operations by self time.
 //
-// Bir trace'te yüzlerce span olabilir; "en yavaş span hangisi" sorusuna
-// bakarak cevap vermek şelaleyi satır satır okumayı gerektirir. Aynı adı
-// taşıyan span'leri toplamak, N+1 sorgu gibi desenleri de görünür kılar:
-// tek tek 2 ms süren 80 sorgu, listede 160 ms olarak en üste çıkar.
+// A trace can hold hundreds of spans, and answering "which span is slowest"
+// by eye means reading the waterfall row by row. Grouping spans that share a
+// name also makes patterns like N+1 queries visible: eighty queries of 2 ms
+// each show up as a single 160 ms row at the top.
 func buildHotspots(spans []SpanView) []Hotspot {
 	if len(spans) == 0 {
 		return []Hotspot{}
@@ -898,7 +900,7 @@ func buildHotspots(spans []SpanView) []Hotspot {
 	return out
 }
 
-// --- yardımcılar ---
+// --- helpers ---
 
 func bucketColumns() []string {
 	cols := make([]string, 0, topology.BucketCount)
@@ -908,8 +910,8 @@ func bucketColumns() []string {
 	return append(cols, "le_inf")
 }
 
-// histogramQuantile, kova sayımlarından doğrusal interpolasyonla quantile
-// tahmin eder. Sonuç milisaniyedir.
+// histogramQuantile estimates a quantile from bucket counts by linear
+// interpolation. The result is in milliseconds.
 func histogramQuantile(counts []uint64, q float64) float64 {
 	var total uint64
 	for _, c := range counts {
@@ -927,7 +929,7 @@ func histogramQuantile(counts []uint64, q float64) float64 {
 			continue
 		}
 		if i >= len(topology.LatencyBounds) {
-			// +Inf kovası: alt sınırı döndürmekten başka bilgi yok.
+			// The +Inf bucket: there is nothing to return but the lower bound.
 			return topology.LatencyBounds[len(topology.LatencyBounds)-1]
 		}
 		lower := 0.0
@@ -951,7 +953,7 @@ func timeRange(r *http.Request) (time.Time, time.Time, error) {
 	if v := qp.Get("to"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			return time.Time{}, time.Time{}, errors.New("to parametresi RFC3339 olmalı")
+			return time.Time{}, time.Time{}, errors.New("the to parameter must be RFC3339")
 		}
 		to = t.UTC()
 	}
@@ -959,16 +961,16 @@ func timeRange(r *http.Request) (time.Time, time.Time, error) {
 	from := to.Add(-time.Hour)
 	if v := qp.Get("from"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
-			// "15m", "2h" gibi göreli değer: to'dan geriye.
+			// A relative value such as "15m" or "2h": backwards from to.
 			from = to.Add(-d)
 		} else if t, err := time.Parse(time.RFC3339, v); err == nil {
 			from = t.UTC()
 		} else {
-			return time.Time{}, time.Time{}, errors.New("from parametresi RFC3339 ya da süre (15m, 2h) olmalı")
+			return time.Time{}, time.Time{}, errors.New("the from parameter must be RFC3339 or a duration (15m, 2h)")
 		}
 	}
 	if !from.Before(to) {
-		return time.Time{}, time.Time{}, errors.New("from, to'dan önce olmalı")
+		return time.Time{}, time.Time{}, errors.New("from must be before to")
 	}
 	return from, to, nil
 }
@@ -1003,7 +1005,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = enc.Encode(v)
 }
 
-// writeJSONStatus, durum koduyla birlikte JSON yazar.
+// writeJSONStatus writes JSON along with a status code.
 func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -1012,27 +1014,27 @@ func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	_ = enc.Encode(v)
 }
 
-// decodeJSON, istek gövdesini çözer. Bilinmeyen alanlar hata verir:
-// "isSuperadmin" yazıp yetkinin neden verilmediğini aramak yerine anında
-// hata almak yeğdir.
+// decodeJSON decodes the request body. Unknown fields are an error: getting
+// told immediately beats writing "isSuperadmin" and then hunting for why the
+// permission was never granted.
 func decodeJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("istek gövdesi çözümlenemedi: %w", err)
+		return fmt.Errorf("could not decode the request body: %w", err)
 	}
 	return nil
 }
 
-// writeErrorCode, istemcinin dallanabilmesi için makine okunur bir kod da
-// ekler; arayüz mesaj metnine göre karar vermek zorunda kalmasın.
+// writeErrorCode also emits a machine-readable code so the client can branch
+// on it, rather than the UI having to decide based on the message text.
 func writeErrorCode(w http.ResponseWriter, status int, msg, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 }
 
-// jsonUnmarshal, dış bir servisin yanıtını çözer.
+// jsonUnmarshal decodes an external service's response.
 func jsonUnmarshal(data []byte, out any) error {
 	return json.Unmarshal(data, out)
 }

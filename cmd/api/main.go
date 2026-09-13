@@ -35,7 +35,7 @@ func main() {
 		if err == nil {
 			break
 		}
-		log.Warn("clickhouse hazır değil", "deneme", attempt, "err", err)
+		log.Warn("clickhouse not ready", "attempt", attempt, "err", err)
 		select {
 		case <-ctx.Done():
 			return
@@ -43,58 +43,58 @@ func main() {
 		}
 	}
 	if err != nil {
-		log.Error("clickhouse'a bağlanılamadı", "err", err)
+		log.Error("could not connect to clickhouse", "err", err)
 		os.Exit(1)
 	}
 	defer store.Close()
 
-	// --- denetim düzlemi ---
+	// --- control plane ---
 	ident, err := openIdentityWithRetry(ctx, config.String("POSTGRES_DSN",
 		"postgres://nabiz:nabiz@localhost:5432/nabiz?sslmode=disable"), log)
 	if err != nil {
-		log.Error("denetim düzlemi veritabanına bağlanılamadı", "err", err)
+		log.Error("could not connect to the control plane database", "err", err)
 		os.Exit(1)
 	}
 	defer ident.Close()
 
 	if err := ident.Migrate(ctx); err != nil {
-		log.Error("denetim düzlemi şeması kurulamadı", "err", err)
+		log.Error("could not create the control plane schema", "err", err)
 		os.Exit(1)
 	}
 
-	// Tanılama jetonları şifreli saklanıyor; anahtar yoksa jeton kaydı
-	// reddedilir ve arayüz bunu açıkça söyler.
+	// Diagnostics tokens are stored encrypted; without a key, storing a token is
+	// refused and the UI says so plainly.
 	if sealer, err := identity.NewSealer(config.String("SECRET_KEY", "")); err == nil {
 		ident.SetSealer(sealer)
 	} else {
-		log.Warn("NABIZ_SECRET_KEY tanımlı değil: tanılama jetonu saklanamayacak")
+		log.Warn("NABIZ_SECRET_KEY is not set: diagnostics tokens will not be stored")
 	}
 
 	dumpDir := config.String("DUMP_DIR", filepath.Join(os.TempDir(), "nabiz-dumps"))
 	if err := os.MkdirAll(dumpDir, 0o750); err != nil {
-		log.Error("dump dizini oluşturulamadı", "dir", dumpDir, "err", err)
+		log.Error("could not create the dump directory", "dir", dumpDir, "err", err)
 		os.Exit(1)
 	}
 
 	created, generated, err := ident.Bootstrap(ctx,
 		config.String("ADMIN_EMAIL", ""), config.String("ADMIN_PASSWORD", ""))
 	if err != nil {
-		log.Error("ilk yönetici oluşturulamadı", "err", err)
+		log.Error("could not create the first administrator", "err", err)
 		os.Exit(1)
 	}
 	if created {
 		email := config.String("ADMIN_EMAIL", "admin@nabiz.local")
 		if generated != "" {
-			// Parola yalnızca burada, bir kez görünür. Varsayılan parolayla
-			// açılan bir yönetim paneli, olmayandan kötüdür.
-			log.Warn("ilk yönetici oluşturuldu — bu parola bir daha gösterilmeyecek",
-				"email", email, "parola", generated)
+			// The password is visible here and only here, once. A management panel that
+			// opens with a default password is worse than none.
+			log.Warn("first administrator created — this password will not be shown again",
+				"email", email, "password", generated)
 		} else {
-			log.Info("ilk yönetici oluşturuldu", "email", email)
+			log.Info("first administrator created", "email", email)
 		}
 	}
 
-	// Süresi geçmiş oturumları düzenli temizle.
+	// Clear out expired sessions on a schedule.
 	go purgeSessions(ctx, ident, log)
 
 	apiServer := api.New(store.Conn(), cfg.Database, ident, dumpDir, log)
@@ -119,17 +119,17 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("nabiz-api çalışıyor", "addr", addr, "clickhouse", cfg.Addrs,
+	log.Info("nabiz-api running", "addr", addr, "clickhouse", cfg.Addrs,
 		"dump_dir", dumpDir, "dump_kota_gb", retention.MaxBytes>>30,
 		"dump_saklama_gun", int(retention.MaxAge.Hours()/24))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("api kapandı", "err", err)
+		log.Error("the api stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-// openIdentityWithRetry, Postgres container'ı API'den sonra ayağa kalkarsa
-// bekler. compose ve k8s'te sık karşılaşılan durum.
+// openIdentityWithRetry waits when the Postgres container comes up after the
+// API. A common situation under both compose and Kubernetes.
 func openIdentityWithRetry(ctx context.Context, dsn string, log *slog.Logger) (*identity.Store, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 30; attempt++ {
@@ -138,7 +138,7 @@ func openIdentityWithRetry(ctx context.Context, dsn string, log *slog.Logger) (*
 			return store, nil
 		}
 		lastErr = err
-		log.Warn("postgres hazır değil, yeniden denenecek", "deneme", attempt, "err", err)
+		log.Warn("postgres not ready, will retry", "attempt", attempt, "err", err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -158,11 +158,11 @@ func purgeSessions(ctx context.Context, ident *identity.Store, log *slog.Logger)
 		case <-ticker.C:
 			n, err := ident.PurgeExpiredSessions(ctx)
 			if err != nil {
-				log.Warn("oturum temizliği başarısız", "err", err)
+				log.Warn("session cleanup failed", "err", err)
 				continue
 			}
 			if n > 0 {
-				log.Info("süresi geçmiş oturumlar silindi", "adet", n)
+				log.Info("expired sessions deleted", "count", n)
 			}
 		}
 	}

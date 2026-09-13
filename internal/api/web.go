@@ -10,11 +10,11 @@ import (
 	"github.com/erdemkayatr/nabiz/web"
 )
 
-// registerUI, gömülü arayüzü kök yola bağlar.
+// registerUI mounts the embedded UI at the root path.
 //
-// Tek sayfalık bir uygulama olduğu için bilinen bir varlık dosyası olmayan
-// her GET isteği index.html'e düşer; böylece #topology gibi bağlantılar
-// doğrudan açılabilir.
+// Because it is a single-page application, every GET request that is not a
+// known asset falls through to index.html, so links such as #topology can be
+// opened directly.
 func registerUI(mux *http.ServeMux) error {
 	assets, err := fs.Sub(web.FS(), ".")
 	if err != nil {
@@ -24,9 +24,8 @@ func registerUI(mux *http.ServeMux) error {
 	if err != nil {
 		return err
 	}
-	// Arayüz binary ile birlikte değiştiği için modtime olarak süreç
-	// başlangıcı kullanılır: yeni sürüm dağıtıldığında tarayıcı önbelleği
-	// kendiliğinden tazelenir.
+	// The UI changes together with the binary, so process start is used as the
+	// modtime: deploying a new version refreshes the browser cache on its own.
 	start := time.Now()
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +36,7 @@ func registerUI(mux *http.ServeMux) error {
 		}
 		data, err := fs.ReadFile(assets, name)
 		if err != nil {
-			// Bilinmeyen yol: API değil, arayüz rotası sayılır.
+			// An unknown path is a UI route, not an API one.
 			serveAsset(w, r, "index.html", index, start)
 			return
 		}

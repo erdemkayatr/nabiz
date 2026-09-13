@@ -4,20 +4,20 @@ using Nabiz.Agent;
 
 namespace Nabiz.Agent.Diagnostics;
 
-/// <summary>Üretilmiş bir tanılama dosyası.</summary>
+/// <summary>A diagnostic file that has been produced.</summary>
 public sealed record DumpFile(string Id, string Kind, long Bytes, DateTimeOffset CreatedAt)
 {
-    /// <summary>Dosyanın diskteki tam yolu.</summary>
+    /// <summary>The file's full path on disk.</summary>
     public string Path { get; init; } = "";
 }
 
 /// <summary>
-/// CPU profili ve bellek dump'ı üretir, üretilenleri yönetir.
+/// Produces CPU profiles and memory dumps, and manages what it produced.
 /// </summary>
 /// <remarks>
-/// Aynı anda yalnızca bir işlem koşar. İki bellek dump'ı birlikte alınırsa
-/// süreç iki kez askıya alınır ve zaten sıkıntıda olan bir uygulamayı
-/// büsbütün durdurur.
+/// Only one operation runs at a time. Two concurrent memory dumps would suspend
+/// the process twice and bring an application that is already in trouble to a
+/// complete stop.
 /// </remarks>
 public sealed class DumpStore
 {
@@ -25,11 +25,11 @@ public sealed class DumpStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _directory;
 
-    // Koşan işlemi dışarıdan durdurabilmek için.
+    // So a running operation can be stopped from outside.
     private CancellationTokenSource? _running;
     private string _runningKind = "";
 
-    /// <summary>Depoyu kurar ve çıktı dizinini hazırlar.</summary>
+    /// <summary>Builds the store and prepares the output directory.</summary>
     public DumpStore(NabizOptions.DiagnosticsSettings settings)
     {
         _settings = settings;
@@ -39,26 +39,26 @@ public sealed class DumpStore
         Directory.CreateDirectory(_directory);
     }
 
-    /// <summary>Çıktı dizini.</summary>
+    /// <summary>The output directory.</summary>
     public string Directory_ => _directory;
 
-    /// <summary>Şu an koşan işlemin türü; yoksa boş.</summary>
+    /// <summary>The kind of operation currently running; empty when idle.</summary>
     public string RunningKind => _runningKind;
 
     /// <summary>
-    /// Koşan işlemi durdurur.
+    /// Stops the running operation.
     /// </summary>
     /// <returns>
-    /// İşlem gerçekten kesilebildiyse true.
+    /// True when the operation really could be interrupted.
     /// </returns>
     /// <remarks>
-    /// CPU profili istenildiği an kesilebilir: oturum kapatılır ve o ana
-    /// kadarki örnekler geçerli bir dosya oluşturur.
+    /// A CPU profile can be interrupted at any time: the session is closed and
+    /// the samples collected so far make a valid file.
     ///
-    /// Bellek dump'ı kesilemez. WriteDump çağrısı runtime'a gidiyor ve
-    /// runtime süreci askıya alıp dosyayı yazıyor; bu iş başladıktan sonra
-    /// geri döndürülemez. Yarıda kesmeye çalışmak askıya alınmış bir süreç
-    /// bırakma riski taşır.
+    /// A memory dump cannot. The WriteDump call goes to the runtime, which
+    /// suspends the process and writes the file; once that starts there is no
+    /// way back. Trying to cut it short risks leaving a suspended process
+    /// behind.
     /// </remarks>
     public bool Cancel()
     {
@@ -70,7 +70,7 @@ public sealed class DumpStore
         catch (ObjectDisposedException) { return false; }
     }
 
-    /// <summary>Üretilmiş dosyaları yeniden eskiye sıralı verir.</summary>
+    /// <summary>Returns the produced files, newest first.</summary>
     public IReadOnlyList<DumpFile> List()
     {
         var dir = new DirectoryInfo(_directory);
@@ -82,16 +82,16 @@ public sealed class DumpStore
             .ToList();
     }
 
-    /// <summary>Kimliğe göre dosyayı bulur. Yol geçişine izin verilmez.</summary>
+    /// <summary>Finds a file by id. Path traversal is not allowed.</summary>
     public DumpFile? Find(string id)
     {
-        // Kimlik doğrudan dosya adı olarak kullanılıyor; "../" ile dizinin
-        // dışına çıkmak mümkün olmamalı.
+        // The id is used directly as the file name; escaping the directory
+        // with "../" must not be possible.
         if (id.Contains('/') || id.Contains('\\') || id.Contains("..")) return null;
         return List().FirstOrDefault(f => f.Id == id);
     }
 
-    /// <summary>Dosyayı siler.</summary>
+    /// <summary>Deletes a file.</summary>
     public bool Delete(string id)
     {
         var file = Find(id);
@@ -101,12 +101,12 @@ public sealed class DumpStore
     }
 
     /// <summary>
-    /// Belirtilen süre boyunca CPU örneklemesi yapar ve .nettrace üretir.
+    /// Samples the CPU for the given duration and produces a .nettrace file.
     /// </summary>
     /// <remarks>
-    /// Çıktı ham nettrace'tir; bilerek çözümlenmiyor. PerfView, Visual Studio
-    /// ve <c>dotnet-trace convert</c> bu biçimi zaten okuyor; kendi
-    /// çözümleyicimizi yazmak, hatalarını da üstlenmek olurdu.
+    /// The output is raw nettrace, deliberately not decoded. PerfView, Visual
+    /// Studio and <c>dotnet-trace convert</c> already read the format; writing
+    /// our own decoder would mean owning its bugs too.
     /// </remarks>
     public async Task<DumpFile> CaptureCpuAsync(int seconds, CancellationToken cancellationToken)
     {
@@ -139,18 +139,18 @@ public sealed class DumpStore
             }
             catch (OperationCanceledException)
             {
-                // Erken durdurma bir hata değil: o ana kadarki örnekler
-                // geçerli bir profil oluşturur.
+                // Stopping early is not an error: the samples collected so far
+                // make a valid profile.
                 stoppedEarly = true;
             }
             finally
             {
-                // İptal edilse bile oturumu kapat: açık kalan bir EventPipe
-                // oturumu sürekli örnekleme maliyeti demektir.
+                // Close the session even when cancelled: an EventPipe session
+                // left open means a permanent sampling cost.
                 session.Stop();
             }
             await copy.ConfigureAwait(false);
-            if (stoppedEarly) Console.WriteLine("[nabiz] CPU profili erken durduruldu");
+            if (stoppedEarly) Console.WriteLine("[nabiz] CPU profile stopped early");
             Trim();
             var info = new FileInfo(path);
             return new DumpFile(info.Name, "cpu", info.Length, info.CreationTimeUtc) { Path = info.FullName };
@@ -163,7 +163,7 @@ public sealed class DumpStore
         }
     }
 
-    /// <summary>Süreç belleğini diske yazar.</summary>
+    /// <summary>Writes the process's memory to disk.</summary>
     public async Task<DumpFile> CaptureMemoryAsync(DumpType type, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -175,8 +175,8 @@ public sealed class DumpStore
             var path = System.IO.Path.Combine(_directory, $"memory-{type.ToString().ToLowerInvariant()}-{Stamp()}.dmp");
             var stopwatch = Stopwatch.StartNew();
 
-            // WriteDump süreci askıya alır ve senkron bloklar; thread havuzunu
-            // tıkamamak için ayrı bir thread'e alıyoruz.
+            // WriteDump suspends the process and blocks synchronously; it is
+            // moved onto its own thread so it does not clog the thread pool.
             await Task.Run(() =>
             {
                 var client = new DiagnosticsClient(System.Environment.ProcessId);
@@ -185,7 +185,7 @@ public sealed class DumpStore
 
             Trim();
             var info = new FileInfo(path);
-            Console.WriteLine($"[nabiz] bellek dump'ı alındı: {info.Name} " +
+            Console.WriteLine($"[nabiz] memory dump taken: {info.Name} " +
                               $"({info.Length / 1024 / 1024} MB, {stopwatch.ElapsedMilliseconds} ms)");
             return new DumpFile(info.Name, "memory", info.Length, info.CreationTimeUtc) { Path = info.FullName };
         }
@@ -197,14 +197,14 @@ public sealed class DumpStore
         }
     }
 
-    /// <summary>Dosya sayısı sınırı aşıldığında en eskileri siler.</summary>
+    /// <summary>Deletes the oldest files once the file count limit is exceeded.</summary>
     private void Trim()
     {
         var files = List();
         foreach (var old in files.Skip(Math.Max(1, _settings.MaxFiles)))
         {
             try { File.Delete(old.Path); }
-            catch (IOException) { /* Kullanımdaysa bir sonraki turda silinir. */ }
+            catch (IOException) { /* If it is in use, it goes on the next round. */ }
         }
     }
 

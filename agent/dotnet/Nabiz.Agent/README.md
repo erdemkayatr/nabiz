@@ -1,14 +1,16 @@
 # Nabiz.Agent
 
-nabiz APM agent'ı. Paketi eklersiniz, derlersiniz, sunucu adresini yazarsınız.
-Uygulama kodunda değişiklik gerekmez.
+The nabiz APM agent. Add the package, build, put in your server address. No
+change to application code is required.
+
+🇹🇷 [Türkçe](README.tr.md)
 
 ```bash
 dotnet add package Nabiz.Agent
 dotnet build
 ```
 
-Derlemeden sonra proje klasöründe `nabiz.json` oluşur:
+After the build a `nabiz.json` appears in the project folder:
 
 ```json
 {
@@ -20,44 +22,44 @@ Derlemeden sonra proje klasöründe `nabiz.json` oluşur:
 }
 ```
 
-`endpoint` alanına nabiz collector adresini yazın. Dosya bir daha üzerine
-yazılmaz; sonraki derlemeler değişikliğinizi korur.
+Put your nabiz collector address in `endpoint`. The file is never overwritten;
+later builds keep your change.
 
-## Yapılandırma
+## Configuration
 
-| Alan | Varsayılan | Açıklama |
+| Field | Default | Description |
 |---|---|---|
-| `endpoint` | `http://localhost:4317` | nabiz collector adresi |
-| `protocol` | `grpc` | `grpc` (4317) veya `http` (4318) |
-| `serviceName` | *(assembly adı)* | Topolojide görünecek ad |
-| `serviceNamespace` | — | Ad çakışmasını önler (`shop/api`) |
+| `endpoint` | `http://localhost:4317` | The nabiz collector address |
+| `protocol` | `grpc` | `grpc` (4317) or `http` (4318) |
+| `serviceName` | *(assembly name)* | The name shown in the topology |
+| `serviceNamespace` | — | Prevents name clashes (`shop/api`) |
 | `environment` | — | `prod`, `staging`, `dev` |
-| `sampleRatio` | `1.0` | 0.0–1.0 arası örnekleme |
-| `enabled` | `true` | `false` ise agent hiç başlamaz |
-| `additionalSources` | *(yaygın kütüphaneler)* | Ek ActivitySource adları |
-| `codeLevel.enabled` | `true` | Otomatik metot ölçümü |
-| `codeLevel.includeNamespaces` | *(giriş assembly kökü)* | Ölçülecek namespace'ler |
-| `codeLevel.excludeNamespaces` | `[]` | Dışlanacak namespace'ler |
-| `codeLevel.captureAllocations` | `true` | Span başına ayrılan bellek |
-| `codeLevel.captureThread` | `true` | Thread kimliği ve async geçişi |
-| `codeLevel.captureParameterTypes` | `true` | Parametre tipleri (değerler asla) |
-| `headers` | `{}` | OTLP başlıkları (ingress kimlik doğrulaması) |
-| `captureDbStatement` | `true` | `false` ise SQL metni span'den silinir |
-| `captureCodeLocation` | `true` | Hatalı span'lere dosya:satır eklenir |
-| `debug` | `false` | Agent'ın kendi tanılama çıktısı |
+| `sampleRatio` | `1.0` | Sampling between 0.0 and 1.0 |
+| `enabled` | `true` | When `false`, the agent never starts |
+| `additionalSources` | *(common libraries)* | Extra ActivitySource names |
+| `codeLevel.enabled` | `true` | Automatic method measurement |
+| `codeLevel.includeNamespaces` | *(entry assembly root)* | Namespaces to measure |
+| `codeLevel.excludeNamespaces` | `[]` | Namespaces to exclude |
+| `codeLevel.captureAllocations` | `true` | Memory allocated per span |
+| `codeLevel.captureThread` | `true` | Thread id and async switch |
+| `codeLevel.captureParameterTypes` | `true` | Parameter types (never values) |
+| `headers` | `{}` | OTLP headers (ingress authentication) |
+| `captureDbStatement` | `true` | When `false`, the SQL text is stripped from the span |
+| `captureCodeLocation` | `true` | Adds file:line to failing spans |
+| `debug` | `false` | The agent's own diagnostic output |
 
-Her alan ortam değişkeniyle ezilebilir: `NABIZ_ENDPOINT`,
+Every field can be overridden with an environment variable: `NABIZ_ENDPOINT`,
 `NABIZ_SERVICE_NAME`, `NABIZ_SAMPLE_RATIO`, `NABIZ_ENABLED` …
 
-Öncelik sırası: **ortam değişkeni > nabiz.json > varsayılan**. Kubernetes'te
-aynı imaj farklı ortamlara gittiği için imajın içindeki dosyayı değiştirmek
-mümkün değildir; dağıtımın söylediği kazanır.
+The precedence is **environment variable > nabiz.json > default**. In Kubernetes
+the same image goes to different environments, so editing the file inside the
+image is not an option; what the deployment says wins.
 
-Standart `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` ve
-`OTEL_RESOURCE_ATTRIBUTES` de okunur — nabiz operator'ının enjekte ettiği
-pod'larda ek ayar gerekmez.
+The standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES` are read as well — pods injected by the nabiz
+operator need no extra configuration.
 
-## MSBuild ayarları
+## MSBuild settings
 
 ```xml
 <PropertyGroup>
@@ -67,102 +69,113 @@ pod'larda ek ayar gerekmez.
 </PropertyGroup>
 ```
 
-`NabizAutoStart` kapalıysa agent'ı kendiniz başlatırsınız:
+With `NabizAutoStart` off, you start the agent yourself:
 
 ```csharp
 Nabiz.Agent.NabizAgent.Start();
 ```
 
-## Otomatik metot seviyesi ölçüm
+> The config file and the automatic startup hook are only generated for
+> executable projects (`OutputType` of `Exe` or `WinExe`). A class library that
+> references the package gets neither.
 
-Otomatik enstrümantasyon istekleri, HTTP çağrılarını ve veritabanı sorgularını
-görür — aradaki kendi kodunuzu görmez. Servislerinizi tek satırla ölçüme
-alabilirsiniz:
+## Automatic method-level measurement
+
+Automatic instrumentation sees requests, HTTP calls and database queries — not
+your own code in between. You can put your services under measurement with one
+line:
 
 ```csharp
-builder.Services.AddScoped<ISepetServisi, SepetServisi>();
-builder.Services.AddScoped<IFiyatServisi, FiyatServisi>();
+builder.Services.AddScoped<ICartService, CartService>();
+builder.Services.AddScoped<IPricingService, PricingService>();
 
-builder.Services.AddNabizCodeLevel();   // kayıtlardan SONRA
+builder.Services.AddNabizCodeLevel();   // AFTER the registrations
 ```
 
-Bu noktadan sonra bu servislerin **bütün metotları**, kodlarına dokunulmadan
-kendi span'ini alır: metot adı, süresi, kendi süresi, ayrılan bellek, thread
-kimliği ve async thread değişimi.
+From that point on, **every method** of those services gets its own span with no
+change to their code: the method name, its duration, its self time, allocated
+memory, thread id and async thread switch.
 
-Parametrelerin yalnızca **tipleri** kaydedilir. Değerler asla gönderilmez:
-parametre kişisel veri, parola ya da jeton taşıyabilir.
+Only the **types** of parameters are recorded. Values are never sent: a
+parameter can carry personal data, a password or a token.
 
-### Neden tek satır gerekiyor
+### Why one line is needed
 
-Dynatrace gibi araçlar CLR Profiler API'si ile çalışma anında IL'i yeniden
-yazar ve hiçbir işaret gerekmeden her metodu görür. Bu paket IL'e dokunmaz:
-bozuk IL üretmek, izlediği uygulamayı çökerten bir gözlemlenebilirlik aracı
-demektir.
+Tools like Dynatrace rewrite IL at runtime through the CLR Profiler API and see
+every method with no markup at all. This package does not touch IL: emitting
+broken IL means an observability tool that crashes the application it observes.
 
-`IHostingStartup` ile bu satırı da kaldırmak denendi ve çalışmıyor: hosting
-startup, uygulamanın kendi servis kayıtlarından **önce** çalışıyor ve
-sarmalanacak servisleri henüz göremiyor.
+Removing even this line with `IHostingStartup` was tried and does not work:
+hosting startup runs **before** the application's own service registrations and
+cannot yet see the services to wrap.
 
-### Gürültüyü susturma
+### Silencing the noise
 
-Tüm servisleri ölçüme aldığınızda bazı metotlar gürültüden başka bir şey
-üretmez: sıkı döngüde çağrılan minik kontroller, her istekte yüzlerce kez
-koşan erişimciler. Bunları işaretleyin:
+Once every service is measured, some methods produce nothing but noise: tiny
+checks called in tight loops, accessors that run hundreds of times per request.
+Mark those:
 
 ```csharp
 [NabizIgnore]
-public bool GecerliAdet(int adet) => adet > 0 && adet < 1000;
+public bool IsValidQuantity(int quantity) => quantity > 0 && quantity < 1000;
 
-[NabizTrace(Name = "birim fiyat oku")]
-public decimal BirimFiyat(string urunKodu) { ... }
+[NabizTrace(Name = "read unit price")]
+public decimal UnitPrice(string productCode) { ... }
 ```
 
-`[NabizIgnore]` metoda ya da tipe konabilir. `[NabizTrace]` span'e okunur bir
-ad verir. İkisi birlikte bulunursa dışlama kazanır: susturma kararı her zaman
-ölçme kararını yener.
+`[NabizIgnore]` can go on a method or a type. `[NabizTrace]` gives the span a
+readable name. When both are present the exclusion wins: a decision to silence
+always beats a decision to measure.
 
-### Sınırlar
+### Limits
 
-- Yalnızca **arayüz üzerinden** kayıtlı servisler sarmalanır. Sınıf olarak
-  kayıtlı servisler için metotların `virtual` olması gerekirdi; o da sessizce
-  eksik ölçüm üretir. Kapsamdaki sınıf kayıtları atlanır ve açılışta listelenir
-  — "neden bu servisi göremiyorum" sorusu loglarda cevaplanmalı.
-- **Metodun içindeki kendi kodunu göremez.** Sarmalama servis sınırındadır;
-  bir metodun içinde çağırdığınız private yardımcı görünmez. Bunun için
-  derleme anında IL weaving gerekiyor (aşağıya bakın).
-- `ValueTask` döndüren metotlarda yalnızca senkron kısım ölçülür. `AsTask()`
-  çağırmak çağıranın elinden sonucu alırdı; span bu durumu açıkça işaretler.
-- Varsayılan olarak yalnızca giriş assembly'sinin kök namespace'i taranır.
-  Farklı bir kapsam için: `AddNabizCodeLevel(o => o.IncludeNamespaces.Add("Shop."))`
+- Only services registered **through an interface** are wrapped. Services
+  registered as concrete classes would need their methods to be `virtual`, and
+  that measures incompletely without saying so. Class registrations in scope are
+  skipped and listed at startup — "why can't I see this service" has to be
+  answerable from the log.
+- **It cannot see your own code inside a method.** Wrapping happens at the
+  service boundary; a private helper you call inside a method is invisible. That
+  needs build-time IL weaving (see below).
+- For methods returning `ValueTask`, only the synchronous part is measured.
+  Calling `AsTask()` would take the result out of the caller's hands; the span
+  marks this case explicitly.
+- By default only the entry assembly's root namespace is scanned. For a
+  different scope: `AddNabizCodeLevel(o => o.IncludeNamespaces.Add("Shop."))`
 
-## Yol haritası: IL weaving
+## Roadmap: IL weaving
 
-Metot içindeki private çağrıları da görmek derleme anında IL'e dokunmayı
-gerektiriyor. Tasarım kararlaştırıldı, henüz yazılmadı:
+Seeing private calls inside a method requires touching IL at build time. The
+design is settled, the code is not written yet:
 
-- Kapsam `Program.cs`'den seçilir: **tüm uygulama assembly'si** ya da
-  **yalnızca `[NabizTrace]` işaretliler**.
-- Tüm assembly modunda istemediğiniz metotları `[NabizIgnore]` ile dışlarsınız
-  — bu attribute bugün de çalışıyor, weaving geldiğinde aynı anlamı taşıyacak.
-- Deneysel bayrak arkasında ayrı bir dalda geliştirilecek; olgunlaşana kadar
-  varsayılan değişmeyecek.
+- The scope is chosen in `Program.cs`: **the whole application assembly**, or
+  **only what is marked `[NabizTrace]`**.
+- In whole-assembly mode you exclude methods you do not want with
+  `[NabizIgnore]` — that attribute works today and will carry the same meaning
+  when weaving arrives.
+- It will be developed on a separate branch behind an experimental flag; the
+  default will not change until it is mature.
 
-## Neler toplanır
+## What is collected
 
-ASP.NET Core istekleri, `HttpClient` çağrıları, SQL Server sorguları ve
-kendi `ActivitySource`'unu yayınlayan yaygın kütüphaneler: PostgreSQL
-(Npgsql), MySQL, Kafka, RabbitMQ, MassTransit, Elasticsearch, MongoDB,
-Quartz, YARP, Azure SDK. Bu kaynakları dinlemek bedavadır — kütüphane yoksa
-kaynak hiç yayın yapmaz. Trace bağlamı `traceparent`
-başlığıyla servisler arasında taşınır; nabiz servis topolojisini bu
-ilişkilerden çıkarır.
+ASP.NET Core requests, `HttpClient` calls, SQL Server queries, and the common
+libraries that publish their own `ActivitySource`: PostgreSQL (Npgsql), MySQL,
+Kafka, RabbitMQ, MassTransit, Elasticsearch, MongoDB, Quartz, YARP, the Azure
+SDK. Listening to these sources is free — if the library is absent, the source
+never emits. Trace context travels between services in the `traceparent` header,
+and nabiz derives the service topology from those relationships.
 
-## Uygulamaya etkisi
+## Effect on the application
 
-- Örnekleme kararı burada verilir: düşen span serileştirilmez, ağa çıkmaz.
-- Gönderim arka planda ve toplu; istek yolunda ağ çağrısı yoktur.
-- Kuyruk dolarsa span düşer. Uygulamanın yavaşlaması yerine telemetri kaybı
-  tercih edilir.
-- Agent başlatılamazsa istisna fırlatmaz, uygulama normal çalışmaya devam
-  eder.
+- The sampling decision is made here: a dropped span is never serialized and
+  never reaches the network.
+- Export is batched and in the background; there is no network call on the
+  request path.
+- If the queue fills, spans are dropped. Losing telemetry is preferred over
+  slowing the application down.
+- If the agent fails to start it throws nothing, and the application carries on
+  normally.
+
+## License
+
+[Apache License 2.0](https://github.com/erdemkayatr/nabiz/blob/main/LICENSE)

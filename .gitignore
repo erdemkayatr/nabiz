@@ -6,7 +6,7 @@ bin/
 samples/dotnet/**/bin/
 samples/dotnet/**/obj/
 
-# yerel araç çıktıları
+# local tool output
 *.out
 *.test
 
@@ -14,8 +14,8 @@ samples/dotnet/**/obj/
 agent/dotnet/**/bin/
 agent/dotnet/**/obj/
 agent/dotnet/local-feed/
-# Örnek uygulamanın config'i derlemede üretilir; commit'lenirse
-# "derleyince oluşur" davranışı doğrulanamaz hale gelir.
+# The sample application's config is generated at build time; committing it
+# would make the "it appears when you build" behaviour unverifiable.
 agent/dotnet/Shop.Sample/nabiz.json
 agent/dotnet/**/*.nettrace
 agent/dotnet/**/*.dmp

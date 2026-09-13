@@ -11,7 +11,7 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/identity"
 )
 
-// requestWith, verilen yetkilendirme bağlamına sahip bir istek üretir.
+// requestWith builds a request carrying the given authorization context.
 func requestWith(access *identity.Access, url string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, url, nil)
 	if access == nil {
@@ -36,52 +36,52 @@ func adminAccess() *identity.Access {
 	}
 }
 
-// Oturumsuz bir istek hiçbir şey görmemeli. Kapsamın varsayılanı "her şey"
-// değil "hiçbir şey" olmak zorunda.
+// A request without a session must see nothing. The default scope has to be
+// "nothing", not "everything".
 func TestScopeWithoutSessionIsEmpty(t *testing.T) {
 	sc := scopeFor(requestWith(nil, "/api/v1/services"))
 	if !sc.empty() {
-		t.Fatal("oturumsuz istek boş kapsam almalı")
+		t.Fatal("a request without a session must get an empty scope")
 	}
 	if sc.unrestricted {
-		t.Fatal("oturumsuz istek sınırsız kapsam aldı")
+		t.Fatal("a request without a session got an unrestricted scope")
 	}
 }
 
 func TestSuperAdminIsUnrestricted(t *testing.T) {
 	sc := scopeFor(requestWith(adminAccess(), "/api/v1/services"))
 	if !sc.unrestricted {
-		t.Fatal("süper yönetici sınırsız olmalı")
+		t.Fatal("a super administrator must be unrestricted")
 	}
 	if sc.empty() {
-		t.Fatal("süper yöneticinin kapsamı boş görünüyor")
+		t.Fatal("the super administrator's scope looks empty")
 	}
 	if f, _ := sc.filterServiceName("service_name"); f != "" {
-		t.Errorf("süper yönetici için filtre üretildi: %q", f)
+		t.Errorf("a filter was produced for a super administrator: %q", f)
 	}
 }
 
 func TestScopeLimitsToAssignedApplications(t *testing.T) {
 	sc := scopeFor(requestWith(userAccess([]string{"api", "worker"}), "/api/v1/services"))
 	if sc.unrestricted {
-		t.Fatal("normal kullanıcı sınırsız kapsam aldı")
+		t.Fatal("an ordinary user got an unrestricted scope")
 	}
 	if !sc.allows("api") || !sc.allows("worker") {
-		t.Error("atanmış uygulamalar kapsam dışı kaldı")
+		t.Error("assigned applications fell outside the scope")
 	}
 	if sc.allows("gizli-servis") {
-		t.Error("atanmamış uygulama kapsama girdi")
+		t.Error("an unassigned application entered the scope")
 	}
 }
 
 func TestProjectlessUserSeesNothing(t *testing.T) {
 	sc := scopeFor(requestWith(userAccess(nil), "/api/v1/services"))
 	if !sc.empty() {
-		t.Fatal("hiçbir projeye atanmamış kullanıcı veri görebiliyor")
+		t.Fatal("a user assigned to no project can see data")
 	}
 }
 
-// Proje filtresi kapsamı daraltmalı, genişletmemeli.
+// A project filter has to narrow the scope, never widen it.
 func TestProjectParameterNarrowsScope(t *testing.T) {
 	access := userAccess([]string{"api", "worker"},
 		identity.Project{Key: "alfa", Applications: []string{"api"}},
@@ -89,17 +89,17 @@ func TestProjectParameterNarrowsScope(t *testing.T) {
 
 	sc := scopeFor(requestWith(access, "/api/v1/services?project=alfa"))
 	if !sc.allows("api") || sc.allows("worker") {
-		t.Errorf("proje filtresi daraltmadı: %v", sc.services)
+		t.Errorf("the project filter did not narrow: %v", sc.services)
 	}
 }
 
-// Erişilemeyen bir proje istendiğinde hata değil boş sonuç dönmeli: aksi
-// halde uç, var olan projeleri saymaya yarayan bir araca dönüşür.
+// Asking for an unreachable project must return an empty result rather than an
+// error: otherwise the endpoint becomes a tool for enumerating projects.
 func TestUnknownProjectYieldsEmptyScopeNotError(t *testing.T) {
 	access := userAccess([]string{"api"}, identity.Project{Key: "alfa", Applications: []string{"api"}})
 	sc := scopeFor(requestWith(access, "/api/v1/services?project=baskasinin-projesi"))
 	if !sc.empty() {
-		t.Fatal("erişilemeyen proje için veri döndü")
+		t.Fatal("data came back for an unreachable project")
 	}
 }
 
@@ -110,26 +110,26 @@ func TestServiceNameFilterBindsServices(t *testing.T) {
 		t.Errorf("beklenmeyen filtre: %q", clause)
 	}
 	if len(args) != 1 {
-		t.Fatalf("argüman sayısı %d, 1 bekleniyordu", len(args))
+		t.Fatalf("argument count %d, expected 1", len(args))
 	}
 	if svcs, ok := args[0].([]string); !ok || len(svcs) != 2 {
-		t.Errorf("servis listesi bağlanmadı: %#v", args[0])
+		t.Errorf("the service list was not bound: %#v", args[0])
 	}
 }
 
-// Topoloji filtresi "namespace/servis" biçimindeki uçları da eşleştirmeli.
+// The topology filter must also match ends shaped "namespace/service".
 func TestTopologyFilterMatchesNamespacedEndpoints(t *testing.T) {
 	sc := scope{services: []string{"api"}}
 	clause, args := sc.filterTopology()
 	if !strings.Contains(clause, "splitByChar('/', client)") ||
 		!strings.Contains(clause, "splitByChar('/', server)") {
-		t.Errorf("kenarın iki ucu da filtrelenmiyor: %q", clause)
+		t.Errorf("both ends of the edge are not filtered: %q", clause)
 	}
 	if !strings.Contains(clause, " OR ") {
-		t.Error("kenarın yalnızca bir ucu kapsamdaysa da görünmeli")
+		t.Error("an edge must show when only one end is in scope")
 	}
 	if len(args) != 2 {
-		t.Errorf("argüman sayısı %d, 2 bekleniyordu", len(args))
+		t.Errorf("argument count %d, expected 2", len(args))
 	}
 }
 
@@ -140,17 +140,17 @@ func TestTraceFilterUsesHasAny(t *testing.T) {
 		t.Errorf("beklenmeyen trace filtresi: %q", clause)
 	}
 	if len(args) != 1 {
-		t.Errorf("argüman sayısı %d, 1 bekleniyordu", len(args))
+		t.Errorf("argument count %d, expected 1", len(args))
 	}
 }
 
-// --- yetki mantığı ---
+// --- permission logic ---
 
 func TestSuperAdminCanDoEverything(t *testing.T) {
 	a := adminAccess()
 	for _, p := range identity.AllPermissions {
 		if !a.Can(p) {
-			t.Errorf("süper yönetici %s yetkisini alamadı", p)
+			t.Errorf("the super administrator did not get the %s permission", p)
 		}
 	}
 }
@@ -158,57 +158,57 @@ func TestSuperAdminCanDoEverything(t *testing.T) {
 func TestPermissionsComeOnlyFromRoleGroups(t *testing.T) {
 	a := userAccess(nil)
 	if !a.Can(identity.PermTopologyRead) {
-		t.Error("gruptan gelen yetki tanınmadı")
+		t.Error("a permission coming from a group was not recognised")
 	}
 	if a.Can(identity.PermAdmin) {
-		t.Error("verilmemiş yönetici yetkisi tanındı")
+		t.Error("an admin permission that was never granted was recognised")
 	}
 	if a.Can(identity.PermTracesRead) {
-		t.Error("verilmemiş trace yetkisi tanındı")
+		t.Error("a trace permission that was never granted was recognised")
 	}
 }
 
 func TestNilAccessCanDoNothing(t *testing.T) {
 	var a *identity.Access
 	if a.Can(identity.PermTopologyRead) {
-		t.Error("nil yetkilendirme bağlamı yetki verdi")
+		t.Error("a nil authorization context granted a permission")
 	}
 	if a.SeesEverything() {
-		t.Error("nil yetkilendirme bağlamı her şeyi görebiliyor")
+		t.Error("a nil authorization context can see everything")
 	}
 }
 
-// Bilinmeyen yetki adları veritabanına yazılmamalı.
+// Unknown permission names must never reach the database.
 func TestUnknownPermissionsRejected(t *testing.T) {
 	if identity.ValidPermission("bir.sey.uydurma") {
-		t.Error("uydurma yetki geçerli sayıldı")
+		t.Error("a made-up permission was treated as valid")
 	}
 	for _, p := range identity.AllPermissions {
 		if !identity.ValidPermission(p) {
-			t.Errorf("%s geçersiz sayıldı", p)
+			t.Errorf("%s was treated as invalid", p)
 		}
 	}
 }
 
-// --- giriş deneme sınırlayıcı ---
+// --- login attempt limiter ---
 
 func TestLoginLimiterBlocksAfterMax(t *testing.T) {
 	l := newLoginLimiter(3, time.Minute)
 	for i := 0; i < 3; i++ {
 		if !l.allow("ip|mail") {
-			t.Fatalf("%d. deneme engellendi, sınır 3", i+1)
+			t.Fatalf("attempt %d was blocked, the limit is 3", i+1)
 		}
 	}
 	if l.allow("ip|mail") {
-		t.Error("sınır aşıldığı halde denemeye izin verildi")
+		t.Error("an attempt was allowed even though the limit was exceeded")
 	}
-	// Farklı kaynak etkilenmemeli.
+	// A different source must not be affected.
 	if !l.allow("baska-ip|mail") {
-		t.Error("bir kaynağın sınırı diğerini de kilitledi")
+		t.Error("one source's limit locked out another")
 	}
-	// Başarılı giriş sayacı temizlemeli.
+	// A successful login must clear the counter.
 	l.clear("ip|mail")
 	if !l.allow("ip|mail") {
-		t.Error("başarılı girişten sonra sayaç temizlenmedi")
+		t.Error("the counter was not cleared after a successful login")
 	}
 }

@@ -1,5 +1,5 @@
 {
-  "$comment": "nabiz agent yapılandırması. Bu dosya derlemede bir kez oluşturulur ve bir daha üzerine yazılmaz.",
+  "$comment": "nabiz agent configuration. This file is generated once at build time and never overwritten.",
 
   "endpoint": "http://localhost:4317",
   "protocol": "grpc",

@@ -1,16 +1,16 @@
 "use strict";
 
 // ==========================================================================
-// YÖNETİM
+// ADMINISTRATION
 //
-// Üç ekran: kullanıcılar, rol grupları, projeler. Model şöyle bağlanıyor:
+// Three screens: users, role groups, projects. The model wires up like this:
 //
-//   kullanıcı ──üye──> rol grubu ──bağlı──> proje ──içerir──> uygulama
+//   user ──member──> role group ──bound──> project ──contains──> application
 //
-// Bir kullanıcı bir uygulamanın telemetrisini, ancak üyesi olduğu bir rol
-// grubu o uygulamanın projesine bağlıysa görebilir. Yetki doğrudan kullanıcıya
-// verilmez; böylece "bu kişi neden bu veriyi görüyor" sorusunun cevabı her
-// zaman tek bir zincirde okunabilir.
+// A user can see an application's telemetry only if a role group they belong
+// to is bound to that application's project. Permissions are never granted
+// directly to a user, so the answer to "why does this person see this data"
+// can always be read off a single chain.
 // ==========================================================================
 
 const admin = {
@@ -40,8 +40,8 @@ async function refreshAdmin() {
   if (!admin.loaded) showState(body, "empty", t("status.loading"));
 
   try {
-    // Üç liste birbirine referans veriyor (kullanıcı→grup, proje→grup), bu
-    // yüzden hepsi birlikte tazeleniyor.
+    // The three lists reference each other (user→group, project→group), so
+    // they are all refreshed together.
     const [users, groups, projects, discovered] = await Promise.all([
       api("/api/v1/admin/users"),
       api("/api/v1/admin/role-groups"),
@@ -84,7 +84,7 @@ function renderAdmin() {
   }
 }
 
-// rowActions, satır sonundaki düzenle/sil düğmeleri.
+// rowActions renders the edit/delete buttons at the end of a row.
 function rowActions(onEdit, onDelete) {
   const cell = el("td", { class: "num actions" });
   cell.append(el("button", { class: "link-btn", text: t("btn.edit"), onclick: (e) => { e.stopPropagation(); onEdit(); } }));
@@ -104,7 +104,7 @@ async function confirmDelete(label, run) {
   }
 }
 
-// --- kullanıcılar ---
+// --- users ---
 
 function renderUsers(body) {
   if (!admin.users.length) { showState(body, "empty", t("admin.noUsers")); return; }
@@ -175,7 +175,7 @@ function openUserDialog(user) {
   }, { submitLabel: isNew ? t("btn.create") : t("btn.save") });
 }
 
-// --- rol grupları ---
+// --- role groups ---
 
 function renderRoleGroups(body) {
   if (!admin.roleGroups.length) { showState(body, "empty", t("admin.noRoleGroups")); return; }
@@ -274,11 +274,11 @@ function openProjectDialog(project) {
     form.append(field(t("admin.name"), el("input", { name: "name", value: project ? project.name : "", required: "" })));
     form.append(field(t("admin.description"), el("input", { name: "description", value: project ? project.description : "" })));
 
-    if (isNew) return; // Uygulama ve grup ataması, proje oluştuktan sonra.
+    if (isNew) return; // Application and group assignment come after the project exists.
 
-    // Keşfedilen servisler + bu projeye zaten atanmış olanlar. Atanmış ama
-    // artık telemetri göndermeyen bir servis listeden düşmemeli, yoksa
-    // kaydetmek onu sessizce siler.
+    // Discovered services plus the ones already assigned to this project. A
+    // service that is assigned but no longer sending telemetry must not drop
+    // off the list, or saving would silently remove it.
     const known = new Map(admin.discovered.map((d) => [d.service, d]));
     for (const a of project.applications || []) if (!known.has(a)) known.set(a, { service: a, calls: 0, projects: [] });
 
@@ -308,8 +308,8 @@ function openProjectDialog(project) {
       const created = await apiJSON("/api/v1/admin/projects", "POST",
         { key: v.key, name: v.name, description: v.description || "" });
       await refreshAdmin();
-      // Yeni projeyi hemen atama ekranıyla aç: "oluştur"dan sonra kullanıcıyı
-      // boş bir listeye bırakmak, işin yarısını yapmaktır.
+      // Open the new project straight into the assignment screen: leaving the
+      // user at an empty list after "create" is doing half the job.
       const fresh = admin.projects.find((p) => p.id === created.id);
       if (fresh) openProjectDialog(fresh);
       return;
@@ -318,8 +318,8 @@ function openProjectDialog(project) {
       name: v.name, description: v.description || "",
       applications: v.applications || [], roleGroupIds: v.roleGroupIds || [],
     });
-    // Jeton yalnızca doldurulduysa gönderilir: boş bırakmak "değiştirme"
-    // demek olmalı, "sil" demek değil.
+    // The token is only sent when it was filled in: leaving it empty has to
+    // mean "do not change", not "delete".
     if (v.diagToken) {
       await apiJSON("/api/v1/admin/projects/" + project.id + "/diagnostics-token", "PUT",
         { token: v.diagToken });

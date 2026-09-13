@@ -59,49 +59,49 @@ func clientSpan(service, spanID string, durMS uint64) *model.Span {
 	}
 }
 
-// Frontend -> backend çağrısının kenara dönüşmesi, topolojinin temel vakası.
+// A frontend -> backend call turning into an edge is topology's base case.
 func TestPairsClientAndServerIntoEdge(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
 
-	// frontend'in giriş span'i (ebeveynsiz) -> giriş noktası kenarı
+	// the frontend's entry span (no parent) -> entry point edge
 	b.observe(serverSpan("frontend", "aaaa", "", 50))
 	// frontend'in HttpClient span'i
 	b.observe(clientSpan("frontend", "bbbb", 40))
-	// backend'in bu çağrıyı karşılayan span'i
+	// the backend span that serves this call
 	b.observe(serverSpan("backend", "cccc", "bbbb", 30))
 
 	b.flush(context.Background())
 
 	entry, ok := sink.find("user", "frontend")
 	if !ok {
-		t.Fatal("giriş noktası kenarı üretilmedi")
+		t.Fatal("no entry point edge was produced")
 	}
 	if entry.Key.ConnType != ConnEntry {
-		t.Errorf("giriş kenarının türü %s, entry bekleniyordu", entry.Key.ConnType)
+		t.Errorf("the entry edge type is %s, expected entry", entry.Key.ConnType)
 	}
 
 	edge, ok := sink.find("frontend", "backend")
 	if !ok {
-		t.Fatal("frontend -> backend kenarı üretilmedi")
+		t.Fatal("no frontend -> backend edge was produced")
 	}
 	if edge.Calls != 1 {
 		t.Errorf("calls = %d, 1 bekleniyordu", edge.Calls)
 	}
 	if edge.Key.ConnType != ConnService {
-		t.Errorf("kenar türü %s, service bekleniyordu", edge.Key.ConnType)
+		t.Errorf("the edge type is %s, expected service", edge.Key.ConnType)
 	}
-	// Süre sunucu tarafından alınmalı: istemcinin gördüğü 40ms değil, 30ms.
+	// The duration must come from the server side: 30ms, not the 40ms the client saw.
 	if edge.DurationSumNS != 30*1e6 {
-		t.Errorf("süre %dns, sunucu tarafı (30ms) bekleniyordu", edge.DurationSumNS)
+		t.Errorf("the duration is %dns, expected the server side (30ms)", edge.DurationSumNS)
 	}
 	if b.stats.Paired.Load() != 1 {
 		t.Errorf("paired = %d, 1 bekleniyordu", b.stats.Paired.Load())
 	}
 }
 
-// Span'ler sırasız gelebilir: sunucu span'i istemciden önce ulaşırsa da
-// eşleşme tutmalı.
+// Spans can arrive out of order: the pairing must still hold when the server
+// span reaches us before the client one.
 func TestPairsWhenServerArrivesFirst(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -111,12 +111,12 @@ func TestPairsWhenServerArrivesFirst(t *testing.T) {
 	b.flush(context.Background())
 
 	if _, ok := sink.find("frontend", "backend"); !ok {
-		t.Fatal("ters sırada gelen span'ler eşleşmedi")
+		t.Fatal("spans arriving out of order did not pair")
 	}
 }
 
-// Veritabanı çağrısının karşı tarafında span yoktur; hedef, span
-// attribute'larından türetilmelidir.
+// A database call has no span on the other side; the target has to be derived
+// from the span attributes.
 func TestInfersDatabaseDependencyOnRotation(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -126,25 +126,25 @@ func TestInfersDatabaseDependencyOnRotation(t *testing.T) {
 	db.DBName = "orders"
 	b.observe(db)
 
-	// Eşi hiç gelmez; iki rotasyon sonunda dış bağımlılık olarak yazılır.
+	// Its pair never arrives; after two rotations it is written as an external dependency.
 	b.rotate()
 	b.rotate()
 	b.flush(context.Background())
 
 	edge, ok := sink.find("backend", "postgresql:orders")
 	if !ok {
-		t.Fatal("veritabanı bağımlılığı kenarı üretilmedi")
+		t.Fatal("no database dependency edge was produced")
 	}
 	if edge.Key.ConnType != ConnDatabase {
-		t.Errorf("kenar türü %s, database bekleniyordu", edge.Key.ConnType)
+		t.Errorf("the edge type is %s, expected database", edge.Key.ConnType)
 	}
 	if b.stats.InferredPeers.Load() != 1 {
 		t.Errorf("inferred_peers = %d, 1 bekleniyordu", b.stats.InferredPeers.Load())
 	}
 }
 
-// Enstrümante olmayan bir dış servise giden çağrı, adres bilgisinden düğüme
-// dönüşmeli.
+// A call to an uninstrumented external service must turn into a node using the
+// address attributes.
 func TestInfersExternalPeerFromAddress(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -159,15 +159,15 @@ func TestInfersExternalPeerFromAddress(t *testing.T) {
 
 	edge, ok := sink.find("backend", "api.stripe.com:443")
 	if !ok {
-		t.Fatal("dış bağımlılık kenarı üretilmedi")
+		t.Fatal("no external dependency edge was produced")
 	}
 	if edge.Key.ConnType != ConnExternal {
-		t.Errorf("kenar türü %s, external bekleniyordu", edge.Key.ConnType)
+		t.Errorf("the edge type is %s, expected external", edge.Key.ConnType)
 	}
 }
 
-// Kubernetes boyutları kenar anahtarına taşınmalı: topoloji hem servis hem
-// workload seviyesinde çizilebilsin.
+// Kubernetes dimensions must be carried into the edge key, so the topology can
+// be drawn at both service and workload level.
 func TestCarriesKubernetesDimensions(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -183,18 +183,18 @@ func TestCarriesKubernetesDimensions(t *testing.T) {
 
 	edge, ok := sink.find("frontend", "backend")
 	if !ok {
-		t.Fatal("kenar üretilmedi")
+		t.Fatal("no edge was produced")
 	}
 	if edge.Key.ClientWorkload != "frontend-deploy" || edge.Key.ServerWorkload != "backend-deploy" {
-		t.Errorf("workload boyutları taşınmadı: %+v", edge.Key)
+		t.Errorf("the workload dimensions were not carried: %+v", edge.Key)
 	}
 	if edge.Key.ClientNamespace != "shop" || edge.Key.ServerNamespace != "shop" {
-		t.Errorf("namespace boyutları taşınmadı: %+v", edge.Key)
+		t.Errorf("the namespace dimensions were not carried: %+v", edge.Key)
 	}
 }
 
-// Aynı kenarın tekrarları tek kayıtta toplanmalı; aksi halde yazma hacmi
-// istek hacmiyle birlikte büyür.
+// Repeats of the same edge must aggregate into one record; otherwise write
+// volume grows with request volume.
 func TestAggregatesRepeatedCalls(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -213,7 +213,7 @@ func TestAggregatesRepeatedCalls(t *testing.T) {
 
 	edge, ok := sink.find("frontend", "backend")
 	if !ok {
-		t.Fatal("kenar üretilmedi")
+		t.Fatal("no edge was produced")
 	}
 	if edge.Calls != 100 {
 		t.Errorf("calls = %d, 100 bekleniyordu", edge.Calls)
@@ -222,11 +222,11 @@ func TestAggregatesRepeatedCalls(t *testing.T) {
 		t.Errorf("errors = %d, 10 bekleniyordu", edge.Errors)
 	}
 	if sinkLen(sink) != 1 {
-		t.Errorf("%d kenar yazıldı, 1 bekleniyordu (toplama çalışmıyor)", sinkLen(sink))
+		t.Errorf("%d edges were written, expected 1 (aggregation is not working)", sinkLen(sink))
 	}
 }
 
-// HTTP 5xx, SDK status'u ERROR'a çevirmese bile hata sayılmalı.
+// An HTTP 5xx counts as an error even when the SDK does not turn the status into ERROR.
 func TestTreatsServerErrorStatusAsError(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -241,12 +241,12 @@ func TestTreatsServerErrorStatusAsError(t *testing.T) {
 
 	edge, _ := sink.find("frontend", "backend")
 	if edge.Errors != 1 {
-		t.Errorf("errors = %d, 1 bekleniyordu (5xx hata sayılmalı)", edge.Errors)
+		t.Errorf("errors = %d, expected 1 (5xx must count as an error)", edge.Errors)
 	}
 }
 
-// Gecikme histogramı doğru kovaya düşmeli; API'deki quantile tahmini buna
-// dayanıyor.
+// The latency histogram must land in the right bucket; the quantile estimate in
+// the API depends on it.
 func TestLatencyBucketing(t *testing.T) {
 	cases := []struct {
 		durationMS uint64
@@ -266,7 +266,7 @@ func TestLatencyBucketing(t *testing.T) {
 	}
 }
 
-// Eşzamanlı yazma altında veri yarışı ya da kayıp olmamalı.
+// No data race or loss under concurrent writes.
 func TestConcurrentObserveIsRaceFree(t *testing.T) {
 	sink := &memSink{}
 	b := newTestBuilder(sink)
@@ -289,14 +289,14 @@ func TestConcurrentObserveIsRaceFree(t *testing.T) {
 
 	edge, ok := sink.find("frontend", "backend")
 	if !ok {
-		t.Fatal("kenar üretilmedi")
+		t.Fatal("no edge was produced")
 	}
 	if want := uint64(goroutines * perGoroutine); edge.Calls != want {
 		t.Errorf("calls = %d, %d bekleniyordu", edge.Calls, want)
 	}
 }
 
-// Bellek sınırı aşıldığında bekleyen kayıt alınmamalı ama kenar kaybolmamalı.
+// When the memory limit is hit, no pending record is taken but the edge must not be lost.
 func TestRespectsPendingLimit(t *testing.T) {
 	sink := &memSink{}
 	cfg := DefaultConfig()
@@ -312,10 +312,10 @@ func TestRespectsPendingLimit(t *testing.T) {
 	b.flush(context.Background())
 
 	if b.stats.PendingDropped.Load() == 0 {
-		t.Error("bekleyen kayıt sınırı devreye girmedi")
+		t.Error("the pending record limit never kicked in")
 	}
 	if _, ok := sink.find("frontend", "downstream"); !ok {
-		t.Error("sınır aşıldığında kenar tamamen kayboldu")
+		t.Error("the edge was lost entirely once the limit was exceeded")
 	}
 }
 

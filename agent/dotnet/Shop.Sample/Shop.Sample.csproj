@@ -8,11 +8,11 @@
 
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="9.0.3" />
-    <!-- Tek satır. Enstrümantasyon, config üretimi ve otomatik başlatma
-         bu paketten geliyor. -->
+    <!-- One line. Instrumentation, config generation and automatic startup
+         all come from this package. -->
     <PackageReference Include="Nabiz.Agent" Version="0.7.0" />
-    <!-- Talep üzerine CPU/bellek dump'ı. Ayrı paket: tanılama IPC yığını
-         yalnızca ihtiyacı olan uygulamalara girsin. -->
+    <!-- On-demand CPU and memory dumps. A separate package, so the
+         diagnostics IPC stack only enters applications that need it. -->
     <PackageReference Include="Nabiz.Agent.Diagnostics" Version="0.7.0" />
   </ItemGroup>
 

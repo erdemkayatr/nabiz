@@ -26,7 +26,7 @@ func init() {
 	_ = corev1.AddToScheme(scheme)
 }
 
-// WebhookStats, enjeksiyon sayaçları.
+// WebhookStats holds the injection counters.
 type WebhookStats struct {
 	Reviewed atomic.Uint64
 	Injected atomic.Uint64
@@ -34,8 +34,8 @@ type WebhookStats struct {
 	Errors   atomic.Uint64
 }
 
-// Webhook, pod'lara enstrümantasyon enjekte eden mutating admission
-// webhook'udur.
+// Webhook is the mutating admission webhook that injects instrumentation into
+// pods.
 type Webhook struct {
 	cfg   InjectConfig
 	log   *slog.Logger
@@ -47,10 +47,10 @@ func NewWebhook(cfg InjectConfig, log *slog.Logger) *Webhook {
 	return &Webhook{cfg: cfg, log: log}
 }
 
-// Stats, sayaçlara erişim verir.
+// Stats exposes the counters.
 func (wh *Webhook) Stats() *WebhookStats { return &wh.stats }
 
-// Handler, /mutate ve /healthz rotalarını kurar.
+// Handler wires up the /mutate and /healthz routes.
 func (wh *Webhook) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /mutate", wh.handleMutate)
@@ -65,29 +65,29 @@ func (wh *Webhook) handleMutate(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 3<<20))
 	if err != nil {
-		wh.fail(w, nil, fmt.Errorf("istek gövdesi okunamadı: %w", err))
+		wh.fail(w, nil, fmt.Errorf("could not read the request body: %w", err))
 		return
 	}
 
 	var review admissionv1.AdmissionReview
 	if _, _, err := codecs.UniversalDeserializer().Decode(body, nil, &review); err != nil {
-		wh.fail(w, nil, fmt.Errorf("AdmissionReview çözümlenemedi: %w", err))
+		wh.fail(w, nil, fmt.Errorf("could not decode the AdmissionReview: %w", err))
 		return
 	}
 	if review.Request == nil {
-		wh.fail(w, nil, fmt.Errorf("AdmissionReview.Request boş"))
+		wh.fail(w, nil, fmt.Errorf("AdmissionReview.Request is empty"))
 		return
 	}
 
 	var pod corev1.Pod
 	if err := json.Unmarshal(review.Request.Object.Raw, &pod); err != nil {
-		wh.fail(w, &review, fmt.Errorf("pod çözümlenemedi: %w", err))
+		wh.fail(w, &review, fmt.Errorf("could not decode the pod: %w", err))
 		return
 	}
 
-	// Enjeksiyon istenmiyorsa dokunma. Webhook asla pod oluşturmayı
-	// engellemez: gözlemlenebilirlik, uygulamanın ayağa kalkmasından daha
-	// önemli olamaz.
+	// If injection is not requested, do not touch it. The webhook never blocks
+	// pod creation: observability cannot matter more than the application coming
+	// up.
 	if !ShouldInject(&pod) {
 		wh.stats.Skipped.Add(1)
 		wh.allow(w, &review, nil)
@@ -98,7 +98,7 @@ func (wh *Webhook) handleMutate(w http.ResponseWriter, r *http.Request) {
 	container, err := Inject(mutated, wh.cfg)
 	if err != nil {
 		wh.stats.Errors.Add(1)
-		wh.log.Error("enjeksiyon başarısız, pod dokunulmadan geçiliyor",
+		wh.log.Error("injection failed, letting the pod through untouched",
 			"namespace", review.Request.Namespace, "pod", pod.Name, "err", err)
 		wh.allow(w, &review, nil)
 		return
@@ -107,7 +107,7 @@ func (wh *Webhook) handleMutate(w http.ResponseWriter, r *http.Request) {
 	patch, err := jsonpatch.CreatePatch(review.Request.Object.Raw, mustMarshal(mutated))
 	if err != nil {
 		wh.stats.Errors.Add(1)
-		wh.log.Error("patch üretilemedi", "err", err)
+		wh.log.Error("could not produce the patch", "err", err)
 		wh.allow(w, &review, nil)
 		return
 	}
@@ -119,7 +119,7 @@ func (wh *Webhook) handleMutate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wh.stats.Injected.Add(1)
-	wh.log.Info("enstrümantasyon enjekte edildi",
+	wh.log.Info("instrumentation injected",
 		"namespace", review.Request.Namespace,
 		"pod", podDisplayName(&pod),
 		"container", container,
@@ -141,11 +141,11 @@ func (wh *Webhook) allow(w http.ResponseWriter, review *admissionv1.AdmissionRev
 	writeReview(w, resp)
 }
 
-// fail, hata durumunda bile Allowed=true döner: webhook'un kendisi kümeyi
-// kilitleyemez.
+// fail returns Allowed=true even on error: the webhook itself must never take
+// the cluster down.
 func (wh *Webhook) fail(w http.ResponseWriter, review *admissionv1.AdmissionReview, err error) {
 	wh.stats.Errors.Add(1)
-	wh.log.Error("admission isteği işlenemedi", "err", err)
+	wh.log.Error("could not handle the admission request", "err", err)
 	resp := &admissionv1.AdmissionResponse{
 		Allowed: true,
 		Result:  &metav1.Status{Message: err.Error()},
@@ -173,7 +173,7 @@ func mustMarshal(v any) []byte {
 	return b
 }
 
-// podDisplayName, pod adı henüz atanmamışsa generateName'i gösterir.
+// podDisplayName shows generateName when the pod name has not been assigned yet.
 func podDisplayName(pod *corev1.Pod) string {
 	if pod.Name != "" {
 		return pod.Name

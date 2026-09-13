@@ -3,18 +3,18 @@
 // ==========================================================================
 // TANILAMA
 //
-// Uygulamalardan CPU profili ve bellek dump'ı ister, sonucu indirir.
+// Requests CPU profiles and memory dumps from applications and downloads the result.
 //
-// Akış: nabiz, örneğin kaydında gördüğü IP'ye istek atar, uygulama dosyayı
-// üretir, nabiz çeker ve saklar. Jeton nabiz'de şifreli durur ve hiçbir zaman
-// arayüze dönmez.
+// Flow: nabiz calls the IP it saw in the instance's registration, the
+// application produces the file, nabiz fetches and stores it. The token stays
+// encrypted in nabiz and never travels back to the UI.
 // ==========================================================================
 
 const diag = { instances: [], artifacts: [], storage: null, loaded: false, busy: new Set() };
 
-// Heartbeat 60 saniyede bir; bir tur kaçırmış örnek muhtemelen kapanmıştır.
-// Ölü bir örneğe dump düğmesi göstermek, kullanıcıyı anlamsız bir hataya
-// sürükler.
+// The heartbeat is every 60 seconds; an instance that missed a round has
+// probably gone. Showing a dump button on a dead instance only walks the user
+// into a pointless error.
 const STALE_AFTER_MS = 95_000;
 const isStale = (instance) => Date.now() - new Date(instance.lastSeen).getTime() > STALE_AFTER_MS;
 
@@ -45,7 +45,7 @@ function renderDiagnostics() {
 
   wrap.append(el("div", { class: "panel-note danger-note", text: t("diag.warning") }));
 
-  // --- çalışan örnekler ---
+  // --- running instances ---
   wrap.append(el("div", { class: "detail-section pad", text: t("diag.instances") }));
   if (!diag.instances.length) {
     wrap.append(el("div", { class: "empty", text: t("diag.noInstances") }));
@@ -99,7 +99,7 @@ function renderDiagnostics() {
     wrap.append(table);
   }
 
-  // --- alınan dosyalar ---
+  // --- collected files ---
   wrap.append(el("div", { class: "detail-section pad", text: t("diag.artifacts") }));
   if (diag.storage) wrap.append(renderStorage(diag.storage));
 
@@ -150,11 +150,11 @@ function renderDiagnostics() {
   body.replaceChildren(wrap);
 }
 
-// capture, dump isteğini başlatır ve ilerleme penceresini açar.
+// capture starts the dump request and opens the progress dialog.
 //
-// Sunucu 202 döner ve işi arka planda yapar: bellek dump'ı dakikalar sürebilir
-// ve tarayıcı beklerken zaman aşımına uğrardı. Pencere kaydın durumunu
-// yoklayarak ilerlemeyi gösterir.
+// The server returns 202 and does the work in the background: a memory dump
+// can take minutes and the browser would time out waiting. The dialog polls
+// the record's status to show progress.
 async function capture(instance, kind) {
   if (kind === "memory" && !window.confirm(t("diag.memoryConfirm"))) return;
 
@@ -177,11 +177,11 @@ async function capture(instance, kind) {
 
 let captureTimer = null;
 
-// openCaptureProgress, dump sürerken ilerlemeyi gösteren pencereyi açar.
+// openCaptureProgress opens the dialog that shows progress while a dump runs.
 //
-// Süre tahmini vermiyoruz: bellek dump'ının ne kadar süreceği sürecin
-// belleğine bağlı ve uydurma bir yüzde çubuğu, bekleyeni yanıltmaktan başka
-// işe yaramaz. Geçen süre gerçek bilgidir, o gösteriliyor.
+// No time estimate is given: how long a memory dump takes depends on the
+// process's memory, and an invented percentage bar does nothing but mislead
+// the person waiting. Elapsed time is real information, so that is what is shown.
 function openCaptureProgress(artifactId, kind, instance) {
   const startedAt = Date.now();
   const dlg = $("#capture-dialog");
@@ -201,8 +201,8 @@ function openCaptureProgress(artifactId, kind, instance) {
     return s < 60 ? `${s} sn` : `${Math.floor(s / 60)} dk ${s % 60} sn`;
   };
 
-  // running=false iken durdurma ipucu gösterilmiyor: iş bittikten sonra
-  // "durdurursanız…" demek okuyanı bir daha yapamayacağı şeye yönlendirir.
+  // When running=false the stop hint is not shown: saying "if you stop it…"
+  // after the job is done points the reader at something they cannot do again.
   const paint = (state, running = true) => {
     const rows = [
       el("div", { class: "cap-target" },
@@ -262,14 +262,14 @@ function openCaptureProgress(artifactId, kind, instance) {
     try {
       const r = await apiJSON("/api/v1/diagnostics/artifacts/" + artifactId + "/cancel", "POST", {});
       if (r.agentStopped) {
-        // Kesilebildi: uygulamanın elinde o ana kadarki geçerli profil var,
-        // nabiz onu indiriyor. Yoklama birazdan "hazır" görecek.
+        // It could be interrupted: the application holds a valid profile of
+        // what it collected, and nabiz is fetching it. The poll will see "ready".
         $("#capture-note").textContent = t("diag.stoppedPartial");
         $("#capture-note").hidden = false;
         stopBtn.hidden = true;
       } else {
-        // Kesilemedi. Durdur düğmesini bırakmak, tekrar denendiğinde yine
-        // olmayacak bir şeyi vaat etmek olurdu.
+        // It could not be interrupted. Leaving the stop button would promise
+        // something that will not happen on a second try either.
         $("#capture-note").textContent = r.reason || t("diag.memoryNotInterruptible");
         $("#capture-note").hidden = false;
         stopBtn.hidden = true;
@@ -282,8 +282,8 @@ function openCaptureProgress(artifactId, kind, instance) {
   };
 
   closeBtn.onclick = () => {
-    // Pencereyi kapatmak işi durdurmaz: kullanıcı arka planda devam etmesini
-    // isteyebilir. Durdurmak için ayrı düğme var.
+    // Closing the dialog does not stop the job: the user may want it to keep
+    // running in the background. Stopping has its own button.
     clearInterval(captureTimer);
     captureTimer = null;
     $("#capture-note").hidden = true;
@@ -292,10 +292,10 @@ function openCaptureProgress(artifactId, kind, instance) {
   };
 }
 
-// renderStorage, disk kullanımını ve saklama kuralını gösterir.
+// renderStorage shows disk usage and the retention rule.
 //
-// Bellek dump'ları yüzlerce MB; kotanın ne kadarının dolduğunu görmeden
-// çalışmak, nabiz'in diskinin izlediği sistemden önce dolmasıyla biter.
+// Memory dumps run to hundreds of megabytes; working without seeing how much
+// of the quota is used ends with nabiz's disk filling before the system it monitors.
 function renderStorage(storage) {
   const used = storage.usedBytes || 0;
   const quota = storage.quotaBytes || 0;

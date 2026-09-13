@@ -11,17 +11,17 @@ using Nabiz.Agent;
 namespace Nabiz.Agent.Diagnostics;
 
 /// <summary>
-/// Talep üzerine CPU profili ve bellek dump'ı alan uçları uygulamaya ekler.
+/// Adds the on-demand CPU profile and memory dump endpoints to the application.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Bellek dump'ı sürecin tüm belleğini diske yazar:</b> bağlantı dizeleri,
-/// oturum jetonları, parolalar, müşteri verisi. Bu yüzden özellik varsayılan
-/// olarak kapalıdır ve jeton verilmeden açılmaz.
+/// <b>A memory dump writes the entire memory of the process to disk:</b>
+/// connection strings, session tokens, passwords, customer data. That is why
+/// the feature is off by default and does not turn on without a token.
 /// </para>
 /// <para>
-/// Kurulum tek satır; gerisi nabiz.json'daki <c>diagnostics</c> bölümünden
-/// yönetilir:
+/// Setup is one line; everything else is managed from the <c>diagnostics</c>
+/// section of nabiz.json:
 /// </para>
 /// <code>
 /// builder.Services.AddNabizDiagnostics();
@@ -29,7 +29,7 @@ namespace Nabiz.Agent.Diagnostics;
 /// </remarks>
 public static class NabizDiagnosticsExtensions
 {
-    /// <summary>Tanılama uçlarını kaydeder.</summary>
+    /// <summary>Registers the diagnostics endpoints.</summary>
     public static IServiceCollection AddNabizDiagnostics(
         this IServiceCollection services,
         Action<NabizOptions.DiagnosticsSettings>? configure = null)
@@ -39,17 +39,19 @@ public static class NabizDiagnosticsExtensions
 
         if (!settings.Enabled)
         {
-            Console.WriteLine("[nabiz] tanılama uçları kapalı (diagnostics.enabled = false)");
+            Console.WriteLine("[nabiz] diagnostics endpoints are off (diagnostics.enabled = false)");
             return services;
         }
 
-        // Jetonsuz açılmaz. Yanlışlıkla enabled=true bırakılmış bir
-        // yapılandırma, süreç belleğini isteyen herkese açık hale getirirdi.
+        // They never open without a token. A configuration left at
+        // enabled=true by accident would hand the process's memory to anyone
+        // who asked.
         if (string.IsNullOrWhiteSpace(settings.Token) || settings.Token.Length < 16)
         {
             Console.Error.WriteLine(
-                "[nabiz] tanılama uçları AÇILMADI: diagnostics.token en az 16 karakter olmalı. " +
-                "Bellek dump'ı bağlantı dizesi ve jeton içerir; jetonsuz açılamaz.");
+                "[nabiz] diagnostics endpoints NOT opened: diagnostics.token must be at " +
+                "least 16 characters. A memory dump contains connection strings and " +
+                "tokens; it cannot be exposed without a token.");
             return services;
         }
 
@@ -59,23 +61,23 @@ public static class NabizDiagnosticsExtensions
         services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(
             new DiagnosticsStartupFilter(settings, store));
 
-        // nabiz arayüzünden tetiklenebilmesi için kendimizi tanıtıyoruz.
+        // Register ourselves so this can be triggered from the nabiz UI.
         services.AddHostedService(provider => new AgentRegistration(
             settings, provider.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>()));
 
-        Console.WriteLine($"[nabiz] tanılama uçları açık: {settings.Path} " +
-                          $"(dizin: {store.Directory_}, indirme: {(settings.AllowDownload ? "açık" : "kapalı")})");
+        Console.WriteLine($"[nabiz] diagnostics endpoints open: {settings.Path} " +
+                          $"(directory: {store.Directory_}, download: {(settings.AllowDownload ? "on" : "off")})");
         return services;
     }
 }
 
 /// <summary>
-/// Tanılama ara katmanını boru hattının en başına yerleştirir.
+/// Places the diagnostics middleware at the very front of the pipeline.
 /// </summary>
 /// <remarks>
-/// IStartupFilter kullanılıyor ki uygulamanın <c>Program.cs</c>'inde ayrıca
-/// <c>app.Map...</c> çağrısı gerekmesin. Uçlar yönlendirmeden önce çalışır:
-/// uygulamanın kendi boru hattı bozulmuşken de dump alınabilmeli.
+/// IStartupFilter is used so the application's <c>Program.cs</c> needs no
+/// <c>app.Map...</c> call of its own. The endpoints run before routing: it must
+/// stay possible to take a dump while the application's own pipeline is broken.
 /// </remarks>
 internal sealed class DiagnosticsStartupFilter(
     NabizOptions.DiagnosticsSettings settings, DumpStore store) : IStartupFilter
@@ -95,7 +97,7 @@ internal sealed class DiagnosticsStartupFilter(
     };
 }
 
-/// <summary>Tanılama uçlarının gövdesi.</summary>
+/// <summary>The body of the diagnostics endpoints.</summary>
 internal static class DiagnosticsEndpoints
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -106,10 +108,11 @@ internal static class DiagnosticsEndpoints
     {
         if (!IsAuthorized(context, settings))
         {
-            // 404 değil 401: yolun varlığını zaten jeton sahibi biliyor,
-            // yanlış jetonla gelen de net bir cevap almalı.
+            // 401, not 404: whoever holds the token already knows the path
+            // exists, and whoever arrives with the wrong one deserves a clear
+            // answer.
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await WriteAsync(context, new { error = "X-Nabiz-Token geçersiz" }).ConfigureAwait(false);
+            await WriteAsync(context, new { error = "X-Nabiz-Token is invalid" }).ConfigureAwait(false);
             return;
         }
 
@@ -124,7 +127,7 @@ internal static class DiagnosticsEndpoints
                 {
                     var seconds = ReadInt(context, "seconds", 20);
                     var file = await store.CaptureCpuAsync(seconds, context.RequestAborted).ConfigureAwait(false);
-                    Log(context, $"CPU profili {seconds}sn");
+                    Log(context, $"CPU profile, {seconds}s");
                     await WriteAsync(context, Describe(file, settings)).ConfigureAwait(false);
                     return;
                 }
@@ -132,7 +135,7 @@ internal static class DiagnosticsEndpoints
                 {
                     var type = ReadDumpType(context);
                     var file = await store.CaptureMemoryAsync(type, context.RequestAborted).ConfigureAwait(false);
-                    Log(context, $"bellek dump'ı ({type})");
+                    Log(context, $"memory dump ({type})");
                     await WriteAsync(context, Describe(file, settings)).ConfigureAwait(false);
                     return;
                 }
@@ -140,16 +143,16 @@ internal static class DiagnosticsEndpoints
                 {
                     var kind = store.RunningKind;
                     var stopped = store.Cancel();
-                    Log(context, $"durdurma isteği ({(kind.Length > 0 ? kind : "boşta")}) → " +
-                                 (stopped ? "durduruldu" : "durdurulamadı"));
+                    Log(context, $"stop request ({(kind.Length > 0 ? kind : "idle")}) -> " +
+                                 (stopped ? "stopped" : "could not stop"));
                     await WriteAsync(context, new
                     {
                         cancelled = stopped,
                         running = kind,
                         reason = stopped ? null
                             : kind == "memory"
-                                ? "bellek dump'ı başladıktan sonra kesilemez: runtime süreci askıya alıp dosyayı yazıyor"
-                                : "durdurulacak bir işlem yok",
+                                ? "a memory dump cannot be interrupted once started: the runtime suspends the process and writes the file"
+                                : "there is no operation to stop",
                     }).ConfigureAwait(false);
                     return;
                 }
@@ -169,7 +172,7 @@ internal static class DiagnosticsEndpoints
                         context.Response.StatusCode = StatusCodes.Status403Forbidden;
                         await WriteAsync(context, new
                         {
-                            error = "indirme kapalı (diagnostics.allowDownload = false)",
+                            error = "downloading is disabled (diagnostics.allowDownload = false)",
                             directory = store.Directory_,
                         }).ConfigureAwait(false);
                         return;
@@ -177,7 +180,7 @@ internal static class DiagnosticsEndpoints
                     var file = store.Find(segment);
                     if (file is null) { context.Response.StatusCode = StatusCodes.Status404NotFound; return; }
 
-                    Log(context, $"indirme {file.Id} ({file.Bytes / 1024 / 1024} MB)");
+                    Log(context, $"download {file.Id} ({file.Bytes / 1024 / 1024} MB)");
                     context.Response.ContentType = "application/octet-stream";
                     context.Response.Headers.ContentDisposition = $"attachment; filename=\"{file.Id}\"";
                     await context.Response.SendFileAsync(file.Path, context.RequestAborted).ConfigureAwait(false);
@@ -194,15 +197,15 @@ internal static class DiagnosticsEndpoints
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     await WriteAsync(context, new
                     {
-                        error = "bilinmeyen uç",
+                        error = "unknown endpoint",
                         endpoints = new[]
                         {
                             $"POST {settings.Path}/cpu?seconds=20",
                             $"POST {settings.Path}/memory?type=heap|full|mini|triage",
                             $"POST {settings.Path}/cancel",
                             $"GET {settings.Path}",
-                            $"GET {settings.Path}/{{dosya}}",
-                            $"DELETE {settings.Path}/{{dosya}}",
+                            $"GET {settings.Path}/{{file}}",
+                            $"DELETE {settings.Path}/{{file}}",
                         },
                     }).ConfigureAwait(false);
                     return;
@@ -210,13 +213,13 @@ internal static class DiagnosticsEndpoints
         }
         catch (Exception ex)
         {
-            // Tanılama ucunun hatası uygulamayı etkilememeli.
+            // A failure in the diagnostics endpoint must not affect the application.
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await WriteAsync(context, new { error = ex.Message, type = ex.GetType().Name }).ConfigureAwait(false);
         }
     }
 
-    /// <summary>Jetonu sabit zamanlı karşılaştırır.</summary>
+    /// <summary>Compares the token in constant time.</summary>
     private static bool IsAuthorized(HttpContext context, NabizOptions.DiagnosticsSettings settings)
     {
         var provided = context.Request.Headers["X-Nabiz-Token"].ToString();
@@ -224,8 +227,8 @@ internal static class DiagnosticsEndpoints
 
         var a = Encoding.UTF8.GetBytes(provided);
         var b = Encoding.UTF8.GetBytes(settings.Token);
-        // FixedTimeEquals eşit uzunluk ister; uzunluk farkı da sızdırmasın
-        // diye önce sabit boyuta özetliyoruz.
+        // FixedTimeEquals wants equal lengths; hashing to a fixed size first
+        // keeps the length difference from leaking either.
         return CryptographicOperations.FixedTimeEquals(SHA256.HashData(a), SHA256.HashData(b));
     }
 
@@ -249,12 +252,12 @@ internal static class DiagnosticsEndpoints
             "full" => DumpType.Full,
             "mini" => DumpType.Normal,
             "triage" => DumpType.Triage,
-            _ => DumpType.WithHeap,   // varsayılan: heap'i içerir ama Full kadar büyük değil
+            _ => DumpType.WithHeap,   // default: includes the heap but is not as large as Full
         };
 
-    // Dump alma işlemi izi kalmalı: kim, ne zaman, neyi aldı.
+    // Taking a dump has to leave a trace: who took what, and when.
     private static void Log(HttpContext context, string what) =>
-        Console.WriteLine($"[nabiz] tanılama: {what} — istemci {context.Connection.RemoteIpAddress}");
+        Console.WriteLine($"[nabiz] diagnostics: {what} — client {context.Connection.RemoteIpAddress}");
 
     private static Task WriteAsync(HttpContext context, object payload)
     {

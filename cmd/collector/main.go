@@ -1,5 +1,5 @@
-// nabiz-collector, OTLP trafiğini alır, ClickHouse'a yazar ve aynı akıştan
-// servis/k8s topolojisini çıkarır.
+// nabiz-collector receives OTLP traffic, writes it to ClickHouse and derives
+// the service and Kubernetes topology from the same stream.
 package main
 
 import (
@@ -39,13 +39,13 @@ func main() {
 
 	store, err := openStoreWithRetry(ctx, chCfg, log)
 	if err != nil {
-		log.Error("clickhouse'a bağlanılamadı", "err", err)
+		log.Error("could not connect to clickhouse", "err", err)
 		os.Exit(1)
 	}
 	defer store.Close()
 
 	if err := store.Migrate(ctx); err != nil {
-		log.Error("şema oluşturulamadı", "err", err)
+		log.Error("could not create the schema", "err", err)
 		os.Exit(1)
 	}
 
@@ -70,17 +70,17 @@ func main() {
 	pipe := pipeline.New(pipeCfg, log, store, topo)
 	pipe.Start(ctx)
 
-	// --- alıcı ---
+	// --- receiver ---
 	recvCfg := otlp.Config{
 		GRPCAddr: config.String("OTLP_GRPC_ADDR", ":4317"),
 		HTTPAddr: config.String("OTLP_HTTP_ADDR", ":4318"),
 	}
 	recv := otlp.New(recvCfg, pipe, log)
 
-	// --- iç gözlem ucu ---
+	// --- introspection endpoint ---
 	go serveDebug(config.String("DEBUG_ADDR", ":8888"), recv, pipe, topo, store, log)
 
-	log.Info("nabiz-collector çalışıyor",
+	log.Info("nabiz-collector running",
 		"otlp_grpc", recvCfg.GRPCAddr,
 		"otlp_http", recvCfg.HTTPAddr,
 		"clickhouse", chCfg.Addrs,
@@ -89,16 +89,16 @@ func main() {
 	)
 
 	if err := recv.Serve(ctx, recvCfg); err != nil {
-		log.Error("alıcı hata verdi", "err", err)
+		log.Error("the receiver failed", "err", err)
 	}
 
-	// Kapanış: önce kuyruğu boşalt, sonra topolojiyi yaz.
-	log.Info("kapanıyor, kuyruk boşaltılıyor")
+	// Shutdown: drain the queue first, then write the topology.
+	log.Info("shutting down, draining the queue")
 	pipe.Stop()
 }
 
-// openStoreWithRetry, ClickHouse'un container'dan önce ayağa kalkmamış olma
-// ihtimaline karşı bekler. compose ve k8s'te sık karşılaşılan durum.
+// openStoreWithRetry waits in case ClickHouse has not come up before this
+// container. A common situation under both compose and Kubernetes.
 func openStoreWithRetry(ctx context.Context, cfg chstore.Config, log *slog.Logger) (*chstore.Store, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 30; attempt++ {
@@ -107,7 +107,7 @@ func openStoreWithRetry(ctx context.Context, cfg chstore.Config, log *slog.Logge
 			return store, nil
 		}
 		lastErr = err
-		log.Warn("clickhouse hazır değil, yeniden denenecek", "deneme", attempt, "err", err)
+		log.Warn("clickhouse not ready, will retry", "attempt", attempt, "err", err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -158,7 +158,7 @@ func serveDebug(addr string, recv *otlp.Receiver, pipe *pipeline.Pipeline, topo 
 	})
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("debug ucu kapandı", "err", err)
+		log.Error("the debug endpoint stopped", "err", err)
 	}
 }
 

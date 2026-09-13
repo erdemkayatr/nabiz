@@ -1,0 +1,102 @@
+name: Publish to NuGet
+
+# Publishing is driven by tags, not by pushes to main: a package version is a
+# promise you cannot take back, and nuget.org does not allow re-uploading the
+# same version. Tagging makes the release an explicit decision.
+#
+#   git tag v0.7.0 && git push origin v0.7.0
+#
+# The tag has to match the <Version> in the .csproj files; the job below checks
+# that and fails rather than publishing a mismatched package.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack only, do not push to nuget.org'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Pack and publish
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve the version
+        id: version
+        run: |
+          csproj_version="$(grep -oPm1 '(?<=<Version>)[^<]+' agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj)"
+          echo "csproj=$csproj_version" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$tag_version" != "$csproj_version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$csproj_version in the csproj."
+              echo "::error::Update the version in both agent csproj files, or tag v$csproj_version."
+              exit 1
+            fi
+          fi
+          echo "Publishing version $csproj_version"
+
+      - name: Verify both packages carry the same version
+        run: |
+          agent="$(grep -oPm1 '(?<=<Version>)[^<]+' agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj)"
+          diag="$(grep -oPm1 '(?<=<Version>)[^<]+' agent/dotnet/Nabiz.Agent.Diagnostics/Nabiz.Agent.Diagnostics.csproj)"
+          if [ "$agent" != "$diag" ]; then
+            echo "::error::Nabiz.Agent is $agent but Nabiz.Agent.Diagnostics is $diag."
+            echo "::error::Nabiz.Agent.Diagnostics depends on a matching Nabiz.Agent, so they release together."
+            exit 1
+          fi
+
+      - name: Build and test before publishing
+        run: |
+          dotnet build agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj -c Release
+
+      - name: Pack Nabiz.Agent
+        run: dotnet pack agent/dotnet/Nabiz.Agent/Nabiz.Agent.csproj -c Release -o artifacts
+
+      # Diagnostics depends on Nabiz.Agent by version. At release time that
+      # version is not on nuget.org yet, so it is restored from the package we
+      # just packed. The feed path is fixed by that project's own NuGet.config.
+      - name: Pack Nabiz.Agent.Diagnostics
+        run: |
+          cp artifacts/Nabiz.Agent.*.nupkg agent/dotnet/local-feed/ 2>/dev/null || \
+            (mkdir -p agent/dotnet/local-feed && cp artifacts/Nabiz.Agent.*.nupkg agent/dotnet/local-feed/)
+          dotnet pack agent/dotnet/Nabiz.Agent.Diagnostics/Nabiz.Agent.Diagnostics.csproj -c Release -o artifacts
+
+      - name: List what will be published
+        run: ls -la artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg-${{ steps.version.outputs.csproj }}
+          path: artifacts/*.nupkg
+
+      # Nabiz.Agent is pushed first: Diagnostics declares a dependency on it,
+      # and a package whose dependency is not yet indexed fails to restore.
+      - name: Push Nabiz.Agent
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: |
+          dotnet nuget push "artifacts/Nabiz.Agent.${{ steps.version.outputs.csproj }}.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push Nabiz.Agent.Diagnostics
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: |
+          dotnet nuget push "artifacts/Nabiz.Agent.Diagnostics.${{ steps.version.outputs.csproj }}.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

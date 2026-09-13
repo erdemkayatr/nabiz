@@ -19,7 +19,7 @@ fmt:
 	$(GO) fmt ./...
 	$(GO) vet ./...
 
-## up: tüm yığını ayağa kaldırır (clickhouse + nabiz + .NET örnekleri + yük)
+## up: brings the whole stack up (clickhouse + nabiz + .NET samples + load)
 up:
 	$(COMPOSE) up -d --build
 
@@ -29,11 +29,11 @@ down:
 logs:
 	$(COMPOSE) logs -f collector
 
-## stats: collector'ın iç sayaçları
+## stats: the collector's internal counters
 stats:
 	@curl -s localhost:8888/stats | python3 -m json.tool
 
-## topology: isteklerden çıkarılan servis grafiği
+## topology: the service graph derived from requests
 topology:
 	@curl -s "localhost:8080/api/v1/topology?from=1h" | python3 -m json.tool
 

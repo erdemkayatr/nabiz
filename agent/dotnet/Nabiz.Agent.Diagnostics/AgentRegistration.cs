@@ -7,19 +7,19 @@ using Nabiz.Agent;
 namespace Nabiz.Agent.Diagnostics;
 
 /// <summary>
-/// Uygulamayı düzenli aralıklarla nabiz'e tanıtır.
+/// Registers the application with nabiz at regular intervals.
 /// </summary>
 /// <remarks>
 /// <para>
-/// nabiz arayüzünün "hangi örnekler ayakta" sorusunu cevaplayabilmesi ve
-/// dump tetikleyebilmesi için bu kayda ihtiyacı var. Telemetriden servis adını
-/// biliyoruz ama tanılama ucunun portunu bilmiyoruz.
+/// The nabiz UI needs this registration to answer "which instances are up" and
+/// to trigger dumps. We know the service name from telemetry, but not the port
+/// of the diagnostics endpoint.
 /// </para>
 /// <para>
-/// Kayıtta tanılama jetonu da gönderilir. nabiz bunu projeye tanımlı jetonla
-/// karşılaştırır; tutmazsa örnek listelenir ama dump tetiklenemez. Bu olmasaydı
-/// sahte bir kayıt, nabiz'i jetonu saldırganın adresine göndermeye ikna
-/// edebilirdi.
+/// The registration also carries the diagnostics token. nabiz compares it
+/// against the token set on the project; if they do not match, the instance is
+/// listed but dumps cannot be triggered. Without that, a forged registration
+/// could talk nabiz into sending the token to an attacker's address.
 /// </para>
 /// </remarks>
 internal sealed class AgentRegistration(
@@ -33,14 +33,15 @@ internal sealed class AgentRegistration(
         var apiUrl = NabizAgent.Options?.ApiUrl;
         if (string.IsNullOrWhiteSpace(apiUrl))
         {
-            Console.WriteLine("[nabiz] apiUrl tanımlı değil; örnek nabiz arayüzünde listelenmeyecek");
+            Console.WriteLine("[nabiz] apiUrl is not set; this instance will not appear in the nabiz UI");
             return;
         }
 
         var url = apiUrl.TrimEnd('/') + "/api/v1/agents/register";
 
-        // Uygulama portunu bağlandıktan sonra okuyabiliriz; BackgroundService
-        // sunucu ayağa kalktıktan sonra çalıştığı için burası doğru an.
+        // The application's port can only be read once it has bound;
+        // BackgroundService runs after the server is up, so this is the right
+        // moment.
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -49,11 +50,11 @@ internal sealed class AgentRegistration(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // nabiz erişilemez olabilir; kayıt yapılamaması uygulamayı
-                // etkilememeli, bir sonraki turda yeniden denenir.
+                // nabiz may be unreachable; a failed registration must not
+                // affect the application, and it is retried next round.
                 if (NabizAgent.Options?.Debug == true)
                 {
-                    Console.WriteLine($"[nabiz] kayıt gönderilemedi: {ex.Message}");
+                    Console.WriteLine($"[nabiz] could not send the registration: {ex.Message}");
                 }
             }
 
@@ -80,8 +81,8 @@ internal sealed class AgentRegistration(
         token = settings.Token,
     };
 
-    // Pod adı varsa onu kullan: bir pod yeniden başladığında yeni bir örnek
-    // olarak görünmeli, aynı makinedeki iki süreç de karışmamalı.
+    // Use the pod name when there is one: a restarted pod should appear as a
+    // new instance, and two processes on the same machine must not collide.
     private static string InstanceId()
     {
         var pod = System.Environment.GetEnvironmentVariable("NABIZ_K8S_POD");

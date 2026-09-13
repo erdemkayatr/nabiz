@@ -9,20 +9,20 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/identity"
 )
 
-// DumpRetention, dump dosyalarının saklama kuralları.
+// DumpRetention holds the retention rules for dump files.
 type DumpRetention struct {
-	// MaxAge, bu yaştan eski dosyalar silinir.
+	// MaxAge: files older than this are deleted.
 	MaxAge time.Duration
-	// MaxBytes, toplam disk kotası. Aşılırsa en eskiden başlayarak silinir.
+	// MaxBytes is the total disk quota. When exceeded, the oldest go first.
 	MaxBytes int64
-	// Interval, temizlik turları arasındaki süre.
+	// Interval is the time between cleanup rounds.
 	Interval time.Duration
 }
 
-// DefaultDumpRetention, makul varsayılanlar.
+// DefaultDumpRetention returns sensible defaults.
 //
-// Bellek dump'ları yüzlerce MB; bir kota olmadan nabiz-api'nin diski, izlediği
-// sistemden önce dolar.
+// Memory dumps run to hundreds of megabytes; without a quota, nabiz-api's disk
+// fills up before the system it monitors.
 func DefaultDumpRetention() DumpRetention {
 	return DumpRetention{
 		MaxAge:   7 * 24 * time.Hour,
@@ -31,10 +31,10 @@ func DefaultDumpRetention() DumpRetention {
 	}
 }
 
-// StartDumpJanitor, saklama kurallarını uygulayan döngüyü başlatır.
+// StartDumpJanitor launches the loop that enforces the retention rules.
 func (s *Server) StartDumpJanitor(ctx context.Context) {
 	go func() {
-		// Açılışta bir kez koş: süreç kapalıyken biriken dosyalar beklemesin.
+		// Run once at startup, so files that piled up while the process was down do not wait.
 		s.cleanDumps(ctx)
 
 		ticker := time.NewTicker(s.retention.Interval)
@@ -50,11 +50,11 @@ func (s *Server) StartDumpJanitor(ctx context.Context) {
 	}()
 }
 
-// cleanDumps, yaş ve kota kurallarını uygular.
+// cleanDumps applies the age and quota rules.
 func (s *Server) cleanDumps(ctx context.Context) {
 	artifacts, err := s.identity.ListArtifacts(ctx, nil, 10000)
 	if err != nil {
-		s.log.Error("dump temizliği için kayıtlar okunamadı", "err", err)
+		s.log.Error("could not read the records for dump cleanup", "err", err)
 		return
 	}
 
@@ -62,8 +62,8 @@ func (s *Server) cleanDumps(ctx context.Context) {
 	var removedAge, removedQuota int
 	var total int64
 
-	// Liste yeniden eskiye sıralı geliyor; yaşı geçenleri at, kalanların
-	// toplamını biriktir.
+	// The list arrives newest-first; drop what is past its age and accumulate
+	// the total of what remains.
 	kept := make([]int, 0, len(artifacts))
 	for i := range artifacts {
 		a := &artifacts[i]
@@ -76,7 +76,7 @@ func (s *Server) cleanDumps(ctx context.Context) {
 		kept = append(kept, i)
 	}
 
-	// Kota aşıldıysa en eskiden başlayarak sil.
+	// If the quota is exceeded, delete starting from the oldest.
 	for i := len(kept) - 1; i >= 0 && total > s.retention.MaxBytes; i-- {
 		a := &artifacts[kept[i]]
 		s.removeDump(ctx, a.ID, a.Filename)
@@ -84,29 +84,29 @@ func (s *Server) cleanDumps(ctx context.Context) {
 		removedQuota++
 	}
 
-	// Kaydı olmayan yetim dosyalar: bir çekme yarıda kaldıysa disk dolu
-	// kalmasın.
+	// Orphaned files with no record: a fetch that was cut short must not leave
+	// the disk full.
 	s.removeOrphans(artifacts)
 
 	if removedAge > 0 || removedQuota > 0 {
-		s.log.Info("dump temizliği",
-			"yas_asimi", removedAge, "kota_asimi", removedQuota,
-			"kalan_bayt", total, "kota", s.retention.MaxBytes)
+		s.log.Info("dump cleanup",
+			"expired", removedAge, "over_quota", removedQuota,
+			"remaining_bytes", total, "quota", s.retention.MaxBytes)
 	}
 }
 
 func (s *Server) removeDump(ctx context.Context, id, filename string) {
 	if filename != "" {
 		if err := os.Remove(filepath.Join(s.dumpDir, filepath.Base(filename))); err != nil && !os.IsNotExist(err) {
-			s.log.Warn("dump dosyası silinemedi", "file", filename, "err", err)
+			s.log.Warn("could not delete the dump file", "file", filename, "err", err)
 		}
 	}
 	if err := s.identity.DeleteArtifact(ctx, id); err != nil {
-		s.log.Warn("dump kaydı silinemedi", "artifact", id, "err", err)
+		s.log.Warn("could not delete the dump record", "artifact", id, "err", err)
 	}
 }
 
-// removeOrphans, veritabanında karşılığı olmayan dosyaları siler.
+// removeOrphans deletes files that have no counterpart in the database.
 func (s *Server) removeOrphans(artifacts []identity.DumpArtifact) {
 	known := make(map[string]struct{}, len(artifacts))
 	for i := range artifacts {
@@ -126,17 +126,17 @@ func (s *Server) removeOrphans(artifacts []identity.DumpArtifact) {
 			continue
 		}
 		info, err := entry.Info()
-		// Yeni yazılmakta olan bir dosyayı silmeyelim.
+		// Never delete a file that is still being written.
 		if err != nil || time.Since(info.ModTime()) < 30*time.Minute {
 			continue
 		}
 		if err := os.Remove(filepath.Join(s.dumpDir, entry.Name())); err == nil {
-			s.log.Info("kaydı olmayan dump dosyası silindi", "file", entry.Name())
+			s.log.Info("deleted a dump file with no record", "file", entry.Name())
 		}
 	}
 }
 
-// dumpUsage, diskteki toplam kullanımı hesaplar.
+// dumpUsage computes the total usage on disk.
 func (s *Server) dumpUsage() (bytes int64, files int) {
 	entries, err := os.ReadDir(s.dumpDir)
 	if err != nil {

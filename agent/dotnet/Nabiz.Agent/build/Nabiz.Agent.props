@@ -1,14 +1,14 @@
 <Project>
   <PropertyGroup>
-    <!-- Config dosyasının adı. Başka bir ad isterseniz projenizde
-         <NabizConfigFile>...</NabizConfigFile> tanımlayın. -->
+    <!-- The config file name. For a different name, set
+         <NabizConfigFile>...</NabizConfigFile> in your project. -->
     <NabizConfigFile Condition="'$(NabizConfigFile)' == ''">nabiz.json</NabizConfigFile>
 
-    <!-- Dosya yoksa derlemede oluşturulsun mu. -->
+    <!-- Whether to create the file at build time when it is absent. -->
     <NabizGenerateConfig Condition="'$(NabizGenerateConfig)' == ''">true</NabizGenerateConfig>
 
-    <!-- Otomatik başlatma. false yaparsanız NabizAgent.Start()'ı kendiniz
-         çağırırsınız. -->
+    <!-- Automatic startup. Set it to false and you call NabizAgent.Start()
+         yourself. -->
     <NabizAutoStart Condition="'$(NabizAutoStart)' == ''">true</NabizAutoStart>
   </PropertyGroup>
 </Project>

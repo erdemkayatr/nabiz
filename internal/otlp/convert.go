@@ -12,9 +12,9 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
-// resourceInfo, tek bir ResourceSpans için bir kez çözülen servis/k8s
-// boyutlarıdır. Aynı resource altındaki yüzlerce span bunu paylaşır, bu yüzden
-// attribute taraması span başına değil resource başına yapılır.
+// resourceInfo holds the service and Kubernetes dimensions resolved once per
+// ResourceSpans. Hundreds of spans under the same resource share it, so the
+// attribute scan happens per resource rather than per span.
 type resourceInfo struct {
 	serviceName      string
 	serviceNamespace string
@@ -73,11 +73,11 @@ func parseResource(r *resourcepb.Resource) resourceInfo {
 		}
 	}
 
-	// Deployment adı yoksa ReplicaSet'ten türet: "api-7d9f8b6c5d" -> "api".
+	// Without a deployment name, derive it from the ReplicaSet: "api-7d9f8b6c5d" -> "api".
 	if info.k8sWorkload == "" && replicaSet != "" {
 		info.k8sWorkload = trimPodHash(replicaSet)
 	}
-	// O da yoksa pod adından türet: "api-7d9f8b6c5d-x2k9p" -> "api".
+	// Failing that, derive it from the pod name: "api-7d9f8b6c5d-x2k9p" -> "api".
 	if info.k8sWorkload == "" && info.k8sPod != "" {
 		info.k8sWorkload = trimPodHash(trimPodHash(info.k8sPod))
 	}
@@ -103,8 +103,8 @@ func trimPodHash(name string) string {
 	return name[:i]
 }
 
-// ConvertTraces, OTLP ResourceSpans listesini dahili Span listesine çevirir.
-// Tek geçişte çalışır ve çıktı dilimini tek seferde ayırır.
+// ConvertTraces turns a list of OTLP ResourceSpans into internal Spans.
+// It works in a single pass and allocates the output slice once.
 func ConvertTraces(resourceSpans []*tracepb.ResourceSpans) []*model.Span {
 	total := 0
 	for _, rs := range resourceSpans {
@@ -207,9 +207,10 @@ func convertSpan(sp *tracepb.Span, info *resourceInfo, scopeName, scopeVersion s
 	}
 }
 
-// promoteAttribute, sık sorgulanan semantic convention alanlarını kolona taşır.
-// Hem güncel (http.request.method) hem eski (http.method) adlar desteklenir;
-// .NET auto-instrumentation sürüme göre ikisinden birini gönderiyor.
+// promoteAttribute lifts frequently queried semantic convention fields into
+// columns. Both the current (http.request.method) and legacy (http.method)
+// names are supported; .NET auto-instrumentation sends one or the other
+// depending on its version.
 func promoteAttribute(s *model.Span, key, val string) {
 	switch key {
 	case "http.request.method", "http.method":

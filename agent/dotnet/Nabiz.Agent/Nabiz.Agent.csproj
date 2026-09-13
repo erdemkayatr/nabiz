@@ -13,12 +13,18 @@
     <Version>0.7.0</Version>
     <Authors>nabiz</Authors>
     <Description>
-      nabiz APM agent'ı. Paketi eklemek yeterlidir: derlemede nabiz.json
-      oluşur, sunucu adresini oraya yazarsınız. Uygulama kodunda değişiklik
-      gerekmez.
+      The nabiz APM agent. Adding the package is enough: a nabiz.json is
+      generated at build time and you put your server address in it. No change
+      to application code is required.
     </Description>
     <PackageTags>apm;opentelemetry;tracing;observability;nabiz</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/erdemkayatr/nabiz</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/erdemkayatr/nabiz</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright 2026 Erdem Kaya</Copyright>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeBuildOutput>true</IncludeBuildOutput>
   </PropertyGroup>
 
@@ -32,9 +38,9 @@
   </ItemGroup>
 
   <!--
-    build/ altındaki her şey pakete gider ve tüketici projede otomatik
-    yüklenir: config şablonu, config'i üreten hedefler ve otomatik başlatmayı
-    enjekte eden kaynak dosya.
+    Everything under build/ goes into the package and loads automatically in
+    the consuming project: the config template, the targets that generate the
+    config, and the source file that injects automatic startup.
   -->
   <ItemGroup>
     <None Include="build\**" Pack="true" PackagePath="build\" />

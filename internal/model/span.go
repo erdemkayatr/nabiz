@@ -1,12 +1,12 @@
-// Package model holds nabiz'in dahili veri modelini tutar. Model, kolon bazlı
-// depolamaya (ClickHouse) doğrudan yazılabilecek şekilde düz tutulur: sıcak
-// yolda map/interface dolaşmak yerine sık sorgulanan alanlar kolon olarak
-// yükseltilmiştir.
+// Package model holds nabiz's internal data model. The model is kept flat so
+// it can be written straight into column-based storage (ClickHouse): instead
+// of walking maps and interfaces on the hot path, frequently queried fields
+// are promoted to columns.
 package model
 
 import "time"
 
-// SpanKind, OTLP span kind değerleriyle birebir aynıdır.
+// SpanKind matches the OTLP span kind values exactly.
 type SpanKind uint8
 
 const (
@@ -35,7 +35,7 @@ func (k SpanKind) String() string {
 	}
 }
 
-// StatusCode, OTLP status code değerleriyle birebir aynıdır.
+// StatusCode matches the OTLP status code values exactly.
 type StatusCode uint8
 
 const (
@@ -55,29 +55,29 @@ func (s StatusCode) String() string {
 	}
 }
 
-// Event, span üzerindeki bir olaydır (exception dahil).
+// Event is an event on a span, exceptions included.
 type Event struct {
 	Timestamp time.Time
 	Name      string
 	Attrs     map[string]string
 }
 
-// Link, başka bir trace/span'e referanstır.
+// Link is a reference to another trace or span.
 type Link struct {
 	TraceID string
 	SpanID  string
 	Attrs   map[string]string
 }
 
-// Span, tek bir iş biriminin kaydıdır.
+// Span is the record of a single unit of work.
 //
-// Alan sırası ClickHouse'daki kolon sırasıyla aynıdır; batch insert bu sırayı
+// The field order matches the column order in ClickHouse; the batch insert
 // varsayar (bkz. internal/storage/clickhouse).
 type Span struct {
 	Timestamp    time.Time
 	TraceID      string // 32 hex karakter
 	SpanID       string // 16 hex karakter
-	ParentSpanID string // 16 hex karakter veya boş
+	ParentSpanID string // 16 hex characters, or empty
 	TraceState   string
 	Flags        uint32
 
@@ -87,23 +87,23 @@ type Span struct {
 	StatusCode    StatusCode
 	StatusMessage string
 
-	// Servis kimliği (resource attributes'tan)
+	// Service identity, from the resource attributes.
 	ServiceName      string
 	ServiceNamespace string
 	ServiceVersion   string
 	ServiceInstance  string
 	SDKLanguage      string
 
-	// Kubernetes boyutları. Operator bunları downward API ile pod'a enjekte
-	// eder; collector sıcak yolda k8s API'sine hiç gitmez.
+	// Kubernetes dimensions. The operator injects these into the pod through the
+	// downward API; the collector never touches the k8s API on the hot path.
 	K8sCluster   string
 	K8sNamespace string
 	K8sPod       string
-	K8sWorkload  string // Deployment/StatefulSet/DaemonSet adı
+	K8sWorkload  string // Deployment/StatefulSet/DaemonSet name
 	K8sNode      string
 	K8sContainer string
 
-	// Sık sorgulanan semantic convention alanları kolon olarak yükseltilir.
+	// Frequently queried semantic convention fields are promoted to columns.
 	HTTPMethod      string
 	HTTPRoute       string
 	HTTPStatusCode  uint16
@@ -127,7 +127,7 @@ type Span struct {
 	Links  []Link
 }
 
-// ServiceKey, servisin topolojideki kimliğidir.
+// ServiceKey is the service's identity in the topology.
 func (s *Span) ServiceKey() string {
 	if s.ServiceNamespace != "" {
 		return s.ServiceNamespace + "/" + s.ServiceName
@@ -135,13 +135,13 @@ func (s *Span) ServiceKey() string {
 	return s.ServiceName
 }
 
-// IsError, span'in hata sayılıp sayılmayacağını söyler. Status ERROR değilse
-// HTTP 5xx de hata kabul edilir: bazı SDK'lar 5xx'i ERROR'a çevirmez.
+// IsError says whether the span counts as an error. When the status is not
+// ERROR, an HTTP 5xx still counts: some SDKs do not turn 5xx into ERROR.
 func (s *Span) IsError() bool {
 	return s.StatusCode == StatusError || s.HTTPStatusCode >= 500
 }
 
-// Batch, pipeline boyunca taşınan span kümesidir.
+// Batch is the set of spans carried through the pipeline.
 type Batch struct {
 	Spans    []*Span
 	Received time.Time

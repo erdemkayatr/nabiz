@@ -1,6 +1,7 @@
-// Frontend de telemetri kodu içermez. HttpClient çağrıları auto-instrumentation
-// tarafından sarılır; trace context (traceparent başlığı) backend'e otomatik
-// taşınır. Topolojinin frontend -> backend kenarını çıkarabilmesi buna dayanır.
+// The frontend contains no telemetry code either. HttpClient calls are wrapped
+// by auto-instrumentation, and the trace context (the traceparent header) is
+// carried to the backend automatically. The topology's frontend -> backend edge
+// is derived from exactly that.
 
 var builder = WebApplication.CreateBuilder(args);
 

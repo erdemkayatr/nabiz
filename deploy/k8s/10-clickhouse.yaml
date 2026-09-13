@@ -1,5 +1,5 @@
-# Tek node ClickHouse. Değerlendirme ve küçük kurulumlar için yeterli;
-# üretimde Altinity ClickHouse Operator ile replikalı kurmak gerekir.
+# Single-node ClickHouse. Enough for evaluation and small installations; in
+# production, run it replicated with the Altinity ClickHouse Operator.
 apiVersion: v1
 kind: Service
 metadata:

@@ -19,61 +19,62 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Yaygın hatalar. Uçlar bunlara bakarak HTTP durum kodu seçer.
+// Common errors. Endpoints pick an HTTP status code by looking at these.
 var (
-	ErrNotFound      = errors.New("kayıt bulunamadı")
-	ErrDuplicate     = errors.New("kayıt zaten var")
-	ErrBadCredential = errors.New("e-posta ya da parola hatalı")
-	ErrInactive      = errors.New("hesap pasif")
-	ErrLastAdmin     = errors.New("sistemdeki son yöneticiyi kaldıramazsınız")
+	ErrNotFound      = errors.New("record not found")
+	ErrDuplicate     = errors.New("record already exists")
+	ErrBadCredential = errors.New("wrong email or password")
+	ErrInactive      = errors.New("account is inactive")
+	ErrLastAdmin     = errors.New("cannot remove the last administrator in the system")
 )
 
-// Store, denetim düzlemi veritabanı.
+// Store is the control plane database.
 type Store struct {
 	pool   *pgxpool.Pool
 	log    *slog.Logger
 	sealer *Sealer
 }
 
-// Open, havuzu açar ve canlılığını doğrular.
+// Open opens the pool and verifies it is alive.
 func Open(ctx context.Context, dsn string, log *slog.Logger) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("postgres dsn çözümlenemedi: %w", err)
+		return nil, fmt.Errorf("could not parse the postgres dsn: %w", err)
 	}
 	cfg.MaxConns = 10
 	cfg.MaxConnLifetime = time.Hour
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("postgres havuzu açılamadı: %w", err)
+		return nil, fmt.Errorf("could not open the postgres pool: %w", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("postgres ping başarısız: %w", err)
+		return nil, fmt.Errorf("postgres ping failed: %w", err)
 	}
 	return &Store{pool: pool, log: log}, nil
 }
 
-// Close, havuzu kapatır.
+// Close closes the pool.
 func (s *Store) Close() { s.pool.Close() }
 
-// Migrate, şemayı idempotent olarak kurar.
+// Migrate creates the schema idempotently.
 func (s *Store) Migrate(ctx context.Context) error {
 	for i, stmt := range Schema {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("şema adımı %d başarısız: %w", i, err)
+			return fmt.Errorf("schema step %d failed: %w", i, err)
 		}
 	}
-	s.log.Info("denetim düzlemi şeması hazır")
+	s.log.Info("control plane schema ready")
 	return nil
 }
 
-// --- kurulum ---
+// --- bootstrap ---
 
-// Bootstrap, hiç kullanıcı yoksa ilk süper yöneticiyi oluşturur ve üretilen
-// parolayı döndürür. Parola verilmişse onu kullanır, boşsa rastgele üretir:
-// varsayılan parolayla açılan bir yönetim paneli, olmayandan kötüdür.
+// Bootstrap creates the first super administrator when there are no users, and
+// returns the generated password. It uses the password given, or generates a
+// random one when none is: a management panel that opens with a default
+// password is worse than none.
 func (s *Store) Bootstrap(ctx context.Context, email, password string) (created bool, generated string, err error) {
 	var count int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count); err != nil {
@@ -91,13 +92,13 @@ func (s *Store) Bootstrap(ctx context.Context, email, password string) (created 
 		generated = password
 	}
 
-	if _, err := s.CreateUser(ctx, email, "Sistem Yöneticisi", password, true); err != nil {
+	if _, err := s.CreateUser(ctx, email, "System Administrator", password, true); err != nil {
 		return false, "", err
 	}
 	return true, generated, nil
 }
 
-// --- kullanıcılar ---
+// --- users ---
 
 const userColumns = `u.id, u.email, u.name, u.is_super_admin, u.is_active, u.created_at, u.last_login_at`
 
@@ -112,7 +113,7 @@ func scanUser(row pgx.Row) (*User, error) {
 	return &u, nil
 }
 
-// ListUsers, kullanıcıları rol gruplarıyla birlikte döndürür.
+// ListUsers returns the users along with their role groups.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+userColumns+`,
@@ -142,19 +143,19 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
-// GetUser, tek kullanıcıyı okur.
+// GetUser reads a single user.
 func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
 	return scanUser(s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users u WHERE u.id = $1`, id))
 }
 
-// CreateUser, yeni kullanıcı açar.
+// CreateUser creates a new user.
 func (s *Store) CreateUser(ctx context.Context, email, name, password string, superAdmin bool) (*User, error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return nil, errors.New("e-posta zorunlu")
+		return nil, errors.New("email is required")
 	}
 	if len(password) < 8 {
-		return nil, errors.New("parola en az 8 karakter olmalı")
+		return nil, errors.New("password must be at least 8 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -171,10 +172,10 @@ func (s *Store) CreateUser(ctx context.Context, email, name, password string, su
 	return u, err
 }
 
-// UpdateUser, ad/aktiflik/yöneticilik alanlarını günceller.
+// UpdateUser updates the name, active and administrator fields.
 func (s *Store) UpdateUser(ctx context.Context, id, name string, isActive, isSuperAdmin bool) (*User, error) {
-	// Son yöneticinin yetkisi alınırsa ya da pasifleştirilirse sisteme kimse
-	// giremez. Bu kapıyı kapatıyoruz.
+	// If the last administrator is demoted or deactivated, nobody can get into
+	// the system. That door stays shut.
 	if !isSuperAdmin || !isActive {
 		if last, err := s.isLastActiveAdmin(ctx, id); err != nil {
 			return nil, err
@@ -189,10 +190,10 @@ func (s *Store) UpdateUser(ctx context.Context, id, name string, isActive, isSup
 		id, strings.TrimSpace(name), isActive, isSuperAdmin))
 }
 
-// SetPassword, parolayı değiştirir ve kullanıcının tüm oturumlarını kapatır.
+// SetPassword changes the password and closes all of the user's sessions.
 func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 	if len(password) < 8 {
-		return errors.New("parola en az 8 karakter olmalı")
+		return errors.New("password must be at least 8 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -205,12 +206,12 @@ func (s *Store) SetPassword(ctx context.Context, id, password string) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	// Parola değişince eski oturumlar geçersiz olmalı.
+	// Once the password changes, the old sessions must stop working.
 	_, err = s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id)
 	return err
 }
 
-// DeleteUser, kullanıcıyı siler.
+// DeleteUser deletes a user.
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
 	if last, err := s.isLastActiveAdmin(ctx, id); err != nil {
 		return err
@@ -227,7 +228,7 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 	return nil
 }
 
-// isLastActiveAdmin, verilen kullanıcı sistemdeki tek aktif yönetici mi?
+// isLastActiveAdmin reports whether this user is the only active administrator.
 func (s *Store) isLastActiveAdmin(ctx context.Context, id string) (bool, error) {
 	var isAdmin bool
 	err := s.pool.QueryRow(ctx, `SELECT is_super_admin AND is_active FROM users WHERE id = $1`, id).Scan(&isAdmin)
@@ -243,7 +244,7 @@ func (s *Store) isLastActiveAdmin(ctx context.Context, id string) (bool, error) 
 	return others == 0, err
 }
 
-// SetUserRoleGroups, kullanıcının gruplarını verilen kümeyle değiştirir.
+// SetUserRoleGroups replaces the user's groups with the given set.
 func (s *Store) SetUserRoleGroups(ctx context.Context, userID string, groupIDs []string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM user_role_groups WHERE user_id = $1`, userID); err != nil {
@@ -260,9 +261,9 @@ func (s *Store) SetUserRoleGroups(ctx context.Context, userID string, groupIDs [
 	})
 }
 
-// --- rol grupları ---
+// --- role groups ---
 
-// ListRoleGroups, grupları üye ve proje sayılarıyla döndürür.
+// ListRoleGroups returns the groups with their member and project counts.
 func (s *Store) ListRoleGroups(ctx context.Context) ([]RoleGroup, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT g.id, g.name, g.description, g.permissions, g.created_at,
@@ -289,11 +290,11 @@ func (s *Store) ListRoleGroups(ctx context.Context) ([]RoleGroup, error) {
 	return out, rows.Err()
 }
 
-// CreateRoleGroup, yeni grup açar.
+// CreateRoleGroup creates a new group.
 func (s *Store) CreateRoleGroup(ctx context.Context, name, description string, perms []Permission) (*RoleGroup, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, errors.New("grup adı zorunlu")
+		return nil, errors.New("group name is required")
 	}
 	g, err := s.scanRoleGroup(s.pool.QueryRow(ctx, `
 		INSERT INTO role_groups (name, description, permissions)
@@ -306,7 +307,7 @@ func (s *Store) CreateRoleGroup(ctx context.Context, name, description string, p
 	return g, err
 }
 
-// UpdateRoleGroup, grubu günceller.
+// UpdateRoleGroup updates a group.
 func (s *Store) UpdateRoleGroup(ctx context.Context, id, name, description string, perms []Permission) (*RoleGroup, error) {
 	g, err := s.scanRoleGroup(s.pool.QueryRow(ctx, `
 		UPDATE role_groups SET name = $2, description = $3, permissions = $4
@@ -319,7 +320,7 @@ func (s *Store) UpdateRoleGroup(ctx context.Context, id, name, description strin
 	return g, err
 }
 
-// DeleteRoleGroup, grubu ve bağlarını siler.
+// DeleteRoleGroup deletes a group and its bindings.
 func (s *Store) DeleteRoleGroup(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM role_groups WHERE id = $1`, id)
 	if err != nil {
@@ -344,9 +345,9 @@ func (s *Store) scanRoleGroup(row pgx.Row) (*RoleGroup, error) {
 	return &g, nil
 }
 
-// --- projeler ---
+// --- projects ---
 
-// ListProjects, projeleri uygulama ve rol grubu listeleriyle döndürür.
+// ListProjects returns the projects with their application and role group lists.
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.id, p.key, p.name, p.description, p.created_at,
@@ -379,11 +380,11 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return out, rows.Err()
 }
 
-// CreateProject, yeni proje açar.
+// CreateProject creates a new project.
 func (s *Store) CreateProject(ctx context.Context, key, name, description string) (*Project, error) {
 	key, name = strings.TrimSpace(key), strings.TrimSpace(name)
 	if key == "" || name == "" {
-		return nil, errors.New("proje anahtarı ve adı zorunlu")
+		return nil, errors.New("project key and name are required")
 	}
 	p, err := s.scanProject(s.pool.QueryRow(ctx, `
 		INSERT INTO projects (key, name, description) VALUES ($1, $2, $3)
@@ -395,7 +396,7 @@ func (s *Store) CreateProject(ctx context.Context, key, name, description string
 	return p, err
 }
 
-// UpdateProject, projeyi günceller.
+// UpdateProject updates a project.
 func (s *Store) UpdateProject(ctx context.Context, id, name, description string) (*Project, error) {
 	return s.scanProject(s.pool.QueryRow(ctx, `
 		UPDATE projects SET name = $2, description = $3 WHERE id = $1
@@ -403,7 +404,7 @@ func (s *Store) UpdateProject(ctx context.Context, id, name, description string)
 		id, strings.TrimSpace(name), strings.TrimSpace(description)))
 }
 
-// DeleteProject, projeyi ve bağlarını siler.
+// DeleteProject deletes a project and its bindings.
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	if err != nil {
@@ -426,7 +427,7 @@ func (s *Store) scanProject(row pgx.Row) (*Project, error) {
 	return &p, nil
 }
 
-// SetProjectApplications, projenin uygulama listesini değiştirir.
+// SetProjectApplications replaces the project's application list.
 func (s *Store) SetProjectApplications(ctx context.Context, projectID string, services []string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM project_applications WHERE project_id = $1`, projectID); err != nil {
@@ -447,7 +448,7 @@ func (s *Store) SetProjectApplications(ctx context.Context, projectID string, se
 	})
 }
 
-// SetProjectRoleGroups, projeye erişebilen grupları değiştirir.
+// SetProjectRoleGroups replaces the groups that can reach the project.
 func (s *Store) SetProjectRoleGroups(ctx context.Context, projectID string, groupIDs []string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM project_role_groups WHERE project_id = $1`, projectID); err != nil {
@@ -464,9 +465,9 @@ func (s *Store) SetProjectRoleGroups(ctx context.Context, projectID string, grou
 	})
 }
 
-// --- oturumlar ---
+// --- sessions ---
 
-// Authenticate, e-posta ve parolayı doğrular.
+// Authenticate verifies an email and password.
 func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
 	var u User
 	var hash string
@@ -476,8 +477,8 @@ func (s *Store) Authenticate(ctx context.Context, email, password string) (*User
 		Scan(&u.ID, &u.Email, &u.Name, &hash, &u.IsSuperAdmin, &u.IsActive, &u.CreatedAt, &u.LastLoginAt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Kullanıcı yoksa da bcrypt maliyetini öde: yanıt süresi
-		// "bu e-posta kayıtlı mı" sorusunu ele vermesin.
+		// Pay the bcrypt cost even when the user does not exist, so response
+		// time does not answer "is this email registered?".
 		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinv"), []byte(password))
 		return nil, ErrBadCredential
 	}
@@ -494,8 +495,8 @@ func (s *Store) Authenticate(ctx context.Context, email, password string) (*User
 	return &u, nil
 }
 
-// CreateSession, oturum açar ve düz jetonu döndürür. Jetonun kendisi
-// saklanmaz, yalnızca SHA-256 özeti.
+// CreateSession opens a session and returns the plain token. The token itself
+// is never stored, only its SHA-256 digest.
 func (s *Store) CreateSession(ctx context.Context, userID, userAgent string, ttl time.Duration) (string, time.Time, error) {
 	token := randomToken(32)
 	expires := time.Now().Add(ttl)
@@ -507,7 +508,7 @@ func (s *Store) CreateSession(ctx context.Context, userID, userAgent string, ttl
 	return token, expires, nil
 }
 
-// LookupSession, jetondan kullanıcıyı bulur. Süresi geçmiş oturum yok sayılır.
+// LookupSession finds the user behind a token. Expired sessions are ignored.
 func (s *Store) LookupSession(ctx context.Context, token string) (*User, error) {
 	u, err := scanUser(s.pool.QueryRow(ctx, `
 		SELECT `+userColumns+`
@@ -517,13 +518,13 @@ func (s *Store) LookupSession(ctx context.Context, token string) (*User, error) 
 	return u, err
 }
 
-// DeleteSession, tek oturumu kapatır.
+// DeleteSession closes a single session.
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, hashToken(token))
 	return err
 }
 
-// PurgeExpiredSessions, süresi geçmiş oturumları temizler.
+// PurgeExpiredSessions clears out expired sessions.
 func (s *Store) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= now()`)
 	if err != nil {
@@ -532,14 +533,14 @@ func (s *Store) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// --- yetkilendirme ---
+// --- authorization ---
 
-// LoadAccess, kullanıcının yetkilerini, projelerini ve erişebildiği
-// uygulamaları tek sorguda toplar. Sorgu uçları bunu kullanır.
+// LoadAccess gathers the user's permissions, projects and reachable
+// applications. The query endpoints work from this.
 func (s *Store) LoadAccess(ctx context.Context, u *User) (*Access, error) {
 	access := &Access{User: u, Permissions: map[Permission]bool{}, Projects: []Project{}, Applications: []string{}}
 
-	// Kullanıcının gruplarındaki tüm yetkiler.
+	// Every permission across the user's groups.
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT unnest(g.permissions)
 		FROM user_role_groups urg JOIN role_groups g ON g.id = urg.role_group_id
@@ -560,8 +561,8 @@ func (s *Store) LoadAccess(ctx context.Context, u *User) (*Access, error) {
 		return nil, err
 	}
 
-	// Süper yönetici tüm projeleri görür; diğerleri yalnızca gruplarına
-	// bağlanmış olanları.
+	// A super administrator sees every project; everyone else sees only those
+	// bound to one of their groups.
 	var projectRows pgx.Rows
 	if u.IsSuperAdmin {
 		projectRows, err = s.pool.Query(ctx, `
@@ -605,7 +606,7 @@ func (s *Store) LoadAccess(ctx context.Context, u *User) (*Access, error) {
 	return access, projectRows.Err()
 }
 
-// --- yardımcılar ---
+// --- helpers ---
 
 func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
@@ -634,8 +635,8 @@ func toPermissions(raw []string) []Permission {
 	return out
 }
 
-// fromPermissions, bilinmeyen yetkileri eler: arayüzden ya da elle gelen
-// serbest metin veritabanına yazılmasın.
+// fromPermissions drops unknown permissions, so free text from the UI or from
+// a hand-written request never reaches the database.
 func fromPermissions(perms []Permission) []string {
 	out := make([]string, 0, len(perms))
 	seen := map[Permission]bool{}
@@ -648,9 +649,9 @@ func fromPermissions(perms []Permission) []string {
 	return out
 }
 
-// parseRoleGroupRefs, SQL tarafında json_agg ile toplanan grup listesini
-// çözer. Ayrı bir sorgu yerine tek geçişte gelmesi, kullanıcı listesindeki
-// N+1 sorgu problemini baştan engelliyor.
+// parseRoleGroupRefs decodes the group list aggregated with json_agg on the
+// SQL side. Getting it in one pass rather than a separate query is what keeps
+// the user list from turning into an N+1 problem.
 func parseRoleGroupRefs(raw string) []RoleGroupRef {
 	out := []RoleGroupRef{}
 	if raw == "" {
@@ -665,8 +666,8 @@ func parseRoleGroupRefs(raw string) []RoleGroupRef {
 func randomToken(n int) string {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand başarısızsa devam etmek güvenli değil.
-		panic("kriptografik rastgelelik alınamadı: " + err.Error())
+		// Carrying on is not safe when crypto/rand fails.
+		panic("could not obtain cryptographic randomness: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(buf)
 }

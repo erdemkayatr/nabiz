@@ -1,9 +1,10 @@
 package identity
 
-// Schema, açılışta idempotent çalıştırılan DDL'ler.
+// Schema holds the DDL statements run idempotently at startup.
 //
-// Silme davranışları bilinçli: bir rol grubu silinince üyelikleri ve proje
-// bağları da gider (CASCADE), ama bir kullanıcı silinince projeler durur.
+// The delete behaviours are deliberate: removing a role group also removes its
+// memberships and project bindings (CASCADE), but removing a user leaves the
+// projects standing.
 var Schema = []string{
 	`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 
@@ -18,8 +19,8 @@ var Schema = []string{
 		updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
 		last_login_at  TIMESTAMPTZ
 	)`,
-	// E-posta büyük/küçük harf duyarsız benzersiz olmalı: "Ali@x.com" ile
-	// "ali@x.com" iki hesap açamasın.
+	// Email has to be unique case-insensitively, so "Ali@x.com" and
+	// "ali@x.com" cannot open two accounts.
 	`CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (lower(email))`,
 
 	`CREATE TABLE IF NOT EXISTS role_groups (
@@ -47,8 +48,9 @@ var Schema = []string{
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS projects_key_key ON projects (lower(key))`,
 
-	// Uygulama = telemetride görülen service.name. Bir servis birden fazla
-	// projeye atanabilir: paylaşılan altyapı servisleri gerçekte böyle.
+	// An application is the service.name seen in telemetry. A service can be
+	// assigned to more than one project: that is how shared infrastructure
+	// services actually work.
 	`CREATE TABLE IF NOT EXISTS project_applications (
 		project_id   UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 		service_name TEXT NOT NULL,
@@ -64,9 +66,10 @@ var Schema = []string{
 		PRIMARY KEY (project_id, role_group_id)
 	)`,
 
-	// Oturum jetonu düz metin saklanmaz: veritabanı sızarsa jetonlar
-	// doğrudan kullanılabilir olmasın.
-	// Projenin tanılama jetonu. Şifreli saklanır; düz metin hiç yazılmaz.
+	// The session token is never stored in plain text, so a leaked database
+	// does not hand over directly usable tokens.
+	// The project's diagnostics token. Stored encrypted; plain text is never
+	// written.
 	`CREATE TABLE IF NOT EXISTS project_diagnostics (
 		project_id   UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
 		token_sealed TEXT NOT NULL,
@@ -74,7 +77,7 @@ var Schema = []string{
 		updated_by   TEXT NOT NULL DEFAULT ''
 	)`,
 
-	// Kendini tanıtan uygulama örnekleri.
+	// Application instances that announce themselves.
 	`CREATE TABLE IF NOT EXISTS agent_instances (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		service_name  TEXT NOT NULL,
@@ -97,10 +100,10 @@ var Schema = []string{
 	`CREATE UNIQUE INDEX IF NOT EXISTS agent_instances_key
 	   ON agent_instances (service_name, instance_id)`,
 	`CREATE INDEX IF NOT EXISTS agent_instances_last_seen ON agent_instances (last_seen DESC)`,
-	// Var olan kurulumlar için: kolon sonradan eklendi.
+	// For existing installations: this column was added later.
 	`ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS advertised_host TEXT NOT NULL DEFAULT ''`,
 
-	// nabiz'in çekip sakladığı dump dosyalarının kaydı.
+	// The record of dump files nabiz fetched and stored.
 	`CREATE TABLE IF NOT EXISTS dump_artifacts (
 		id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		instance_id  UUID REFERENCES agent_instances(id) ON DELETE SET NULL,

@@ -9,7 +9,7 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/identity"
 )
 
-// registerAdmin, denetim düzlemi uçlarını bağlar. Hepsi admin.manage ister.
+// registerAdmin wires up the control plane endpoints. All of them need admin.manage.
 func (s *Server) registerAdmin(mux *http.ServeMux) {
 	admin := func(h http.HandlerFunc) http.HandlerFunc {
 		return requirePermission(identity.PermAdmin, h)
@@ -41,12 +41,12 @@ func (s *Server) handleListPermissions(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"permissions": identity.AllPermissions})
 }
 
-// handleDiscoveredApplications, telemetride görülen servisleri ve hangi
-// projelere atandıklarını döndürür.
+// handleDiscoveredApplications returns the services seen in telemetry and the
+// projects they are assigned to.
 //
-// Uygulama listesi elle yazılmaz: collector zaten hangi servislerin veri
-// gönderdiğini biliyor. Yönetici, keşfedilen listeden seçerek atama yapar,
-// böylece yazım hatası yüzünden veri göremeyen bir proje oluşmaz.
+// The application list is never typed by hand: the collector already knows
+// which services are sending data. An administrator assigns by picking from
+// the discovered list, so a typo cannot produce a project that shows nothing.
 func (s *Server) handleDiscoveredApplications(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.conn.Query(r.Context(), fmt.Sprintf(`
 		SELECT service_name, sum(calls) AS calls, max(bucket) AS last_seen
@@ -96,7 +96,7 @@ func (s *Server) handleDiscoveredApplications(w http.ResponseWriter, r *http.Req
 	writeJSON(w, map[string]any{"applications": out})
 }
 
-// --- kullanıcılar ---
+// --- users ---
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.identity.ListUsers(r.Context())
@@ -128,7 +128,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.log.Info("kullanıcı oluşturuldu", "email", user.Email, "by", accessFrom(r).User.Email)
+	s.log.Info("user created", "email", user.Email, "by", accessFrom(r).User.Email)
 	writeJSONStatus(w, http.StatusCreated, user)
 }
 
@@ -173,9 +173,9 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// Kendini silmek, yöneticiyi kilitli kapının dışında bırakır.
+	// Deleting yourself leaves the administrator locked outside the door.
 	if id == accessFrom(r).User.ID {
-		writeErrorCode(w, http.StatusBadRequest, "kendi hesabınızı silemezsiniz", "self_delete")
+		writeErrorCode(w, http.StatusBadRequest, "you cannot delete your own account", "self_delete")
 		return
 	}
 	if err := s.identity.DeleteUser(r.Context(), id); err != nil {
@@ -185,7 +185,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- rol grupları ---
+// --- role groups ---
 
 func (s *Server) handleListRoleGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := s.identity.ListRoleGroups(r.Context())
@@ -264,13 +264,13 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeIdentityError(w, err)
 		return
 	}
-	s.log.Info("proje oluşturuldu", "key", p.Key, "by", accessFrom(r).User.Email)
+	s.log.Info("project created", "key", p.Key, "by", accessFrom(r).User.Email)
 	writeJSONStatus(w, http.StatusCreated, p)
 }
 
-// handleUpdateProject, adı, açıklamayı, uygulama atamalarını ve erişim
-// yetkisi olan rol gruplarını tek çağrıda günceller. Arayüzdeki düzenleme
-// ekranı tek "kaydet" düğmesi gösterdiği için uçlar da bölünmüyor.
+// handleUpdateProject updates the name, description, application assignments
+// and the role groups with access, all in one call. The edit screen in the UI
+// shows a single "save" button, so the endpoints are not split either.
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name         string   `json:"name"`
@@ -307,13 +307,13 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeIdentityError, depo hatalarını doğru HTTP koduna çevirir.
+// writeIdentityError maps store errors onto the right HTTP code.
 func writeIdentityError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, identity.ErrNotFound):
-		writeErrorCode(w, http.StatusNotFound, "kayıt bulunamadı", "not_found")
+		writeErrorCode(w, http.StatusNotFound, "record not found", "not_found")
 	case errors.Is(err, identity.ErrDuplicate):
-		writeErrorCode(w, http.StatusConflict, "bu ad ya da e-posta zaten kullanımda", "duplicate")
+		writeErrorCode(w, http.StatusConflict, "that name or email is already in use", "duplicate")
 	case errors.Is(err, identity.ErrLastAdmin):
 		writeErrorCode(w, http.StatusBadRequest, identity.ErrLastAdmin.Error(), "last_admin")
 	default:

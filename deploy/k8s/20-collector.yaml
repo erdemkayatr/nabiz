@@ -36,8 +36,8 @@ spec:
             - { name: NABIZ_RETENTION_DAYS,     value: "7" }
             - { name: NABIZ_WORKERS,            value: "4" }
             - { name: NABIZ_BATCH_SIZE,         value: "5000" }
-            # Node boyutunu açmak, node'lar arası trafiği görünür kılar ama
-            # kenar kardinalitesini node sayısı kadar çarpar.
+                        # Turning on the node dimension makes node-to-node traffic visible
+                        # but multiplies edge cardinality by the number of nodes.
             - { name: NABIZ_TOPOLOGY_INCLUDE_NODE, value: "false" }
           ports:
             - { containerPort: 4317 }

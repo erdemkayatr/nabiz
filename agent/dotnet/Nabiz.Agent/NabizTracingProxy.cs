@@ -5,20 +5,20 @@ using System.Reflection;
 namespace Nabiz.Agent;
 
 /// <summary>
-/// Bir servisin her metot çağrısını ölçen saydam sarmalayıcı.
+/// A transparent wrapper that measures every method call on a service.
 /// </summary>
-// sealed DEĞİL: DispatchProxy çalışma anında bu tipten türeyen bir proxy
-// üretiyor, mühürlü bir sınıftan türetemez.
+// NOT sealed: DispatchProxy generates a proxy deriving from this type at
+// runtime, and it cannot derive from a sealed class.
 internal class NabizTracingProxy : DispatchProxy
 {
     private object _target = null!;
     private CodeLevelOptions _options = null!;
     private string _typeName = "";
 
-    // .NET 10, DispatchProxy'ye Create(Type, Type) aşırı yüklemesini ekledi;
-    // ada göre arama artık belirsiz. Jenerik olanı parametre imzasıyla
-    // ayırıyoruz. Sonuç tip başına önbelleğe alınır: bu kod scoped bir
-    // servisin her çözümlemesinde çalışıyor.
+    // .NET 10 added a Create(Type, Type) overload to DispatchProxy, so looking
+    // it up by name is now ambiguous. The generic one is picked out by its
+    // signature. The result is cached per type: this code runs on every
+    // resolution of a scoped service.
     private static readonly MethodInfo CreateMethod =
         typeof(DispatchProxy)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
@@ -29,7 +29,7 @@ internal class NabizTracingProxy : DispatchProxy
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo> CreateCache = new();
 
-    /// <summary>Verilen arayüz için proxy üretir.</summary>
+    /// <summary>Builds a proxy for the given interface.</summary>
     internal static object Wrap(Type serviceType, object target, CodeLevelOptions options)
     {
         var create = CreateCache.GetOrAdd(serviceType,
@@ -43,9 +43,8 @@ internal class NabizTracingProxy : DispatchProxy
         return proxy;
     }
 
-    // Metot başına karar bir kez verilip önbelleğe alınır: her çağrıda
-    // attribute taramak, ölçmeye çalıştığımız gecikmeye kendi maliyetimizi
-    // eklemek olurdu.
+    // The decision is made once per method and cached: scanning attributes on
+    // every call would add our own cost to the very latency we are measuring.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<MethodInfo, string?> _spanNames = new();
 
     protected override object? Invoke(MethodInfo? method, object?[]? args)
@@ -58,8 +57,8 @@ internal class NabizTracingProxy : DispatchProxy
         var parent = Activity.Current;
         var activity = NabizCodeLevel.Source.StartActivity(spanName, ActivityKind.Internal);
 
-        // Örnekleme span'i düşürdüyse hiçbir ölçüm yapma: kapalı bir agent'ın
-        // maliyeti tek bir null kontrolü olmalı.
+        // If sampling dropped the span, measure nothing: the cost of a disabled
+        // agent should be a single null check.
         if (activity is null) return InvokeTarget(method, args);
 
         var allocStart = _options.CaptureAllocations ? GC.GetAllocatedBytesForCurrentThread() : 0;
@@ -71,19 +70,20 @@ internal class NabizTracingProxy : DispatchProxy
         {
             var result = InvokeTarget(method, args);
 
-            // Task döndüren metotlarda iş henüz bitmedi; span'i tamamlanınca
-            // kapat. Orijinal nesne döndürülür, çağıranın tipi değişmez.
+            // For methods returning a Task the work is not done yet; close the
+            // span when it completes. The original object is returned, so the
+            // caller's type does not change.
             if (result is Task task)
             {
-                // Activity.Current'ı ÇAĞIRANA hemen geri ver.
+                // Hand Activity.Current straight back to the CALLER.
                 //
-                // Çağrılan metot ilk await'e kadar senkron koştu ve kendi alt
-                // span'lerini bu activity'nin altında açtı; gerisi async
-                // akışın kendi ExecutionContext'inde doğru ebeveyni taşıyor.
-                // Ama çağıranın bir sonraki satırı da burada başlıyor: Current
-                // hâlâ bu activity'yi gösterirse, çağıranın SONRAKİ kardeş
-                // çağrısı yanlışlıkla bunun çocuğu olur. O zaman ağaç bozulur
-                // ve self time toplamı trace süresini aşar.
+                // The called method ran synchronously up to its first await and
+                // opened its own child spans under this activity; from there on
+                // the async flow carries the right parent in its own
+                // ExecutionContext. But the caller's next line starts here too:
+                // if Current still points at this activity, the caller's NEXT
+                // sibling call would wrongly become its child. The tree breaks
+                // and the sum of self times exceeds the trace duration.
                 Activity.Current = parent;
 
                 task.ContinueWith(
@@ -94,9 +94,10 @@ internal class NabizTracingProxy : DispatchProxy
                 return result;
             }
 
-            // ValueTask'i tüketmeden beklemenin yolu yok; AsTask() çağırmak
-            // çağıranın elinden sonucu alırdı. Süre yalnızca senkron kısmı
-            // kapsar ve span bunu açıkça söyler.
+            // There is no way to await a ValueTask without consuming it, and
+            // calling AsTask() would take the result out of the caller's hands.
+            // The duration covers only the synchronous part, and the span says
+            // so explicitly.
             if (result is ValueTask || (result is not null && IsGenericValueTask(result.GetType())))
             {
                 activity.SetTag("nabiz.timing.partial", "value_task_sync_only");
@@ -113,12 +114,12 @@ internal class NabizTracingProxy : DispatchProxy
     }
 
     /// <summary>
-    /// Metodun span adını belirler; ölçülmeyecekse null döner.
+    /// Determines the method's span name, or null when it is not measured.
     /// </summary>
     private string? ResolveSpanName(MethodInfo method)
     {
-        // Hedefteki gerçek metodu bul: attribute'lar çoğunlukla arayüze değil
-        // uygulamaya konur.
+        // Find the real method on the target: attributes are usually placed on
+        // the implementation rather than the interface.
         var implementation = FindImplementation(method);
 
         if (HasIgnore(method) || HasIgnore(implementation)) return null;
@@ -141,8 +142,8 @@ internal class NabizTracingProxy : DispatchProxy
         }
         catch
         {
-            // Açık arayüz uygulamaları ve bazı jenerik durumlar eşlenemeyebilir;
-            // bu durumda arayüzdeki attribute'a düşülür.
+            // Explicit interface implementations and some generic cases cannot
+            // be mapped; we then fall back to the attribute on the interface.
             return null;
         }
     }
@@ -158,11 +159,11 @@ internal class NabizTracingProxy : DispatchProxy
         }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {
-            // Yansıma katmanının sardığı istisnayı çıkar: uygulamanın gördüğü
-            // yığın izi proxy yokmuş gibi olmalı.
+            // Unwrap the exception the reflection layer wrapped: the stack
+            // trace the application sees should look as if no proxy existed.
             System.Runtime.ExceptionServices.ExceptionDispatchInfo
                 .Capture(ex.InnerException).Throw();
-            throw; // erişilmez
+            throw; // unreachable
         }
     }
 
@@ -177,8 +178,8 @@ internal class NabizTracingProxy : DispatchProxy
             var parameters = method.GetParameters();
             if (parameters.Length > 0)
             {
-                // Yalnızca tipler. Değerler kişisel veri, parola ya da jeton
-                // taşıyabilir; span'e hiç girmezler.
+                // Types only. Values can carry personal data, passwords or
+                // tokens; they never enter the span.
                 activity.SetTag("code.parameter.types",
                     string.Join(", ", parameters.Select(p => p.ParameterType.Name)));
             }
@@ -191,8 +192,9 @@ internal class NabizTracingProxy : DispatchProxy
         if (_options.CaptureAllocations)
         {
             var delta = GC.GetAllocatedBytesForCurrentThread() - allocStart;
-            // Async metotlarda devam farklı bir thread'de koşabilir ve sayaç
-            // thread başına tutulur; negatif fark anlamsızdır, atılır.
+            // In async methods the continuation can run on a different thread
+            // and the counter is per thread; a negative delta is meaningless
+            // and is discarded.
             if (delta > 0) activity.SetTag("nabiz.allocated.bytes", delta);
         }
         if (_options.CaptureThread)
@@ -214,9 +216,9 @@ internal class NabizTracingProxy : DispatchProxy
                 { "exception.stacktrace", error.ToString() },
             }));
         }
-        // Stop yalnızca Activity.Current == activity ise Current'ı değiştirir.
-        // Continuation başka bir akışta koşabildiği için yine de koruyoruz:
-        // ölçüm aracı, ölçtüğü akışın bağlamını kirletmemeli.
+        // Stop only changes Current when Activity.Current == activity. We save
+        // and restore anyway, because the continuation can run on a different
+        // flow: a measuring tool must not pollute the context it measures.
         var saved = Activity.Current;
         activity.Stop();
         if (!ReferenceEquals(Activity.Current, saved)) Activity.Current = saved;

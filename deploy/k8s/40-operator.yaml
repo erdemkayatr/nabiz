@@ -1,6 +1,6 @@
-# nabiz-operator: .NET pod'larına enstrümantasyonu otomatik enjekte eder.
+# nabiz-operator: automatically injects instrumentation into .NET pods.
 #
-# Kullanım: uygulamanın pod şablonuna tek bir annotation:
+# Usage: a single annotation on the application's pod template:
 #   metadata:
 #     annotations:
 #       nabiz.io/inject-dotnet: "true"
@@ -11,9 +11,9 @@ metadata:
   name: nabiz-operator
   namespace: nabiz
 ---
-# Operator'ın tek ihtiyacı, açılışta ürettiği CA'yı kendi webhook
-# yapılandırmasına yazmak. Pod okuma/yazma yetkisi YOK: enjeksiyon admission
-# sırasında olur, sonradan pod düzenlemeye gerek kalmaz.
+# All the operator needs is to write the CA it generates at startup into its own
+# webhook configuration. It has NO pod read/write permission: injection happens
+# at admission, so there is no need to edit pods afterwards.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -55,9 +55,9 @@ metadata:
   name: nabiz-operator
   namespace: nabiz
 spec:
-  # Tek replika: her replika kendi CA'sını üretip caBundle'a yazar; iki
-  # replika birbirinin sertifikasını ezer. Yüksek erişilebilirlik gerekirse
-  # sertifikayı bir Secret'ta paylaştırmak gerekir.
+    # One replica: each replica would generate its own CA and write it to the
+    # caBundle, so two replicas overwrite each other's certificate. High
+    # availability would require sharing the certificate through a Secret.
   replicas: 1
   selector:
     matchLabels:
@@ -78,7 +78,7 @@ spec:
             - { name: NABIZ_COLLECTOR_ENDPOINT,    value: "http://nabiz-collector.nabiz.svc:4317" }
             - { name: NABIZ_INSTRUMENTATION_IMAGE, value: "nabiz/dotnet-instrumentation:1.16.0" }
             - { name: NABIZ_CLUSTER_NAME,          value: "" }
-            # Örnekleme agent tarafında: düşürülen span hiç serileştirilmez.
+                        # Sampling happens in the agent: a dropped span is never serialized.
             - { name: NABIZ_DEFAULT_SAMPLE_RATIO,  value: "1.0" }
           ports:
             - { name: webhook, containerPort: 9443 }
@@ -104,8 +104,8 @@ webhooks:
   - name: dotnet.nabiz.io
     admissionReviewVersions: ["v1"]
     sideEffects: None
-    # Webhook erişilemezse pod yine de oluşur. Gözlemlenebilirlik aracı,
-    # uygulamanın ayağa kalkmasını engelleyemez.
+        # If the webhook is unreachable, the pod is still created. An observability
+        # tool cannot stop the application from coming up.
     failurePolicy: Ignore
     timeoutSeconds: 5
     reinvocationPolicy: Never
@@ -115,7 +115,7 @@ webhooks:
         namespace: nabiz
         path: /mutate
         port: 443
-      # caBundle operator tarafından açılışta doldurulur.
+            # The caBundle is filled in by the operator at startup.
       caBundle: ""
     rules:
       - operations: ["CREATE"]
@@ -123,7 +123,7 @@ webhooks:
         apiVersions: ["v1"]
         resources: ["pods"]
         scope: "Namespaced"
-    # nabiz'in kendi bileşenleri enjeksiyon dışında kalsın.
+        # Keep nabiz's own components out of injection.
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name

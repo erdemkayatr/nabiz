@@ -1,10 +1,10 @@
 "use strict";
 
 // ==========================================================================
-// DİL
+// LANGUAGE
 //
-// Sözlük tek yerde. Statik metinler data-i18n ile işaretli, dinamikler t()
-// üzerinden geçer. Sayı ve saat biçimi de dile bağlıdır.
+// The dictionary lives in one place. Static text is marked with data-i18n,
+// dynamic text goes through t(). Number and time formats follow the language too.
 // ==========================================================================
 
 const STRINGS = {
@@ -84,7 +84,7 @@ const STRINGS = {
     "span.threadSwitched": "async thread değişimi",
     "span.params": "parametreler", "span.partial": "yalnızca senkron kısım ölçüldü",
 
-    // --- giriş ---
+    // --- login ---
     "login.title": "nabiz'e giriş",
     "login.subtitle": "Devam etmek için hesabınızla giriş yapın",
     "login.email": "E-posta", "login.password": "Parola", "login.submit": "Giriş yap",
@@ -95,7 +95,7 @@ const STRINGS = {
     "login.failed": "Giriş yapılamadı.",
     "login.noAccess": "Hiçbir projeye erişiminiz yok. Yöneticinizin sizi bir rol grubuna eklemesi gerekiyor.",
 
-    // --- kullanıcı menüsü ---
+    // --- user menu ---
     "user.logout": "Çıkış yap", "user.changePassword": "Parolamı değiştir",
     "user.superAdmin": "Sistem yöneticisi",
     "pw.title": "Parolayı değiştir", "pw.current": "Mevcut parola", "pw.new": "Yeni parola",
@@ -103,10 +103,10 @@ const STRINGS = {
     "pw.tooShort": "Parola en az 8 karakter olmalı.",
     "pw.changed": "Parola değişti. Yeniden giriş yapmanız gerekiyor.",
 
-    // --- proje seçici ---
+    // --- project selector ---
     "project.all": "Tüm projeler", "project.label": "Proje",
 
-    // --- yönetim ---
+    // --- administration ---
     "admin.users": "Kullanıcılar", "admin.roleGroups": "Rol grupları", "admin.projects": "Projeler",
     "admin.newUser": "Yeni kullanıcı", "admin.newRoleGroup": "Yeni rol grubu", "admin.newProject": "Yeni proje",
     "admin.editUser": "Kullanıcıyı düzenle", "admin.editRoleGroup": "Rol grubunu düzenle",
@@ -317,9 +317,9 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = { view: "topology", range: "1h", level: "service", traceId: null, lastOk: 0, offline: false };
 
-// session, sunucunun /auth/me yanıtını tutar: kim, ne yapabilir, hangi
-// projelere erişir. Arayüz yetki kararlarını buradan okur — ama bu yalnızca
-// görünürlük içindir; asıl kontrol sunucuda.
+// session holds the server's /auth/me response: who the user is, what they can
+// do, which projects they reach. The UI reads its permission decisions from
+// here — but that is for visibility only; the real control is on the server.
 const session = {
   user: null, permissions: new Set(), projects: [], isSuperAdmin: false,
   project: "",
@@ -343,9 +343,9 @@ const svg = (tag, attrs = {}) => {
   return n;
 };
 
-// api, tüm istekleri tek noktadan geçirir. 401 alındığında oturum düşmüş
-// demektir: kullanıcıyı giriş ekranına döndürürüz, aksi halde her panel ayrı
-// ayrı "yükleniyor"da asılı kalır.
+// api funnels every request through one place. A 401 means the session is
+// gone: we send the user back to the login screen, or every panel would hang
+// separately on "loading".
 async function api(path, options = {}) {
   const res = await fetch(path, {
     credentials: "same-origin",
@@ -379,7 +379,7 @@ const truncate = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 const showState = (c, kind, msg) => c.replaceChildren(el("div", { class: kind, text: msg }));
 const tr_unknown = () => STRINGS[LANG]["label.unknown"];
 
-// scopeQuery, seçili projeyi sorgu dizesine ekler.
+// scopeQuery appends the selected project to the query string.
 const scopeQuery = () => session.project ? "&project=" + encodeURIComponent(session.project) : "";
 
 const th = (txt, num) => el("th", { class: num ? "num" : null, text: txt });
@@ -387,7 +387,7 @@ const td = (kid) => el("td", {}, typeof kid === "string" ? document.createTextNo
 const tdNum = (kid) => { const c = el("td", { class: "num" }); c.append(typeof kid === "string" ? document.createTextNode(kid) : kid); return c; };
 const tr = (cells) => { const r = el("tr"); for (const c of cells) r.append(c); return r; };
 
-// friendlyError, sunucunun makine okunur kodunu kullanıcı diline çevirir.
+// friendlyError turns the server's machine-readable code into the user's language.
 function friendlyError(e) {
   switch (e.code) {
     case "forbidden": return t("err.forbidden");
@@ -398,7 +398,7 @@ function friendlyError(e) {
 }
 
 // ==========================================================================
-// KİMLİK
+// IDENTITY
 // ==========================================================================
 
 function applySession(me) {
@@ -430,8 +430,8 @@ function showApp() {
   renderNav();
 }
 
-// handleSessionLost, oturum sunucu tarafında düştüğünde çağrılır (süre doldu,
-// parola değişti, yönetici hesabı pasifleştirdi).
+// handleSessionLost is called when the session drops server-side (it expired,
+// the password changed, an administrator deactivated the account).
 function handleSessionLost() {
   session.user = null;
   showLogin();
@@ -493,8 +493,8 @@ function renderUserChip() {
   );
 }
 
-// renderProjectSelector, kullanıcının birden fazla projesi varsa kapsam
-// seçici gösterir. Tek projesi olan için seçim yapmak gereksiz gürültü.
+// renderProjectSelector shows a scope picker when the user has more than one
+// project. Choosing is needless noise for someone with a single project.
 function renderProjectSelector() {
   const wrap = $("#project-wrap");
   if (session.isSuperAdmin || session.projects.length > 1) {
@@ -516,9 +516,9 @@ function renderProjectSelector() {
   }
 }
 
-// renderNav, yalnızca yetkisi olan sekmeleri gösterir. Gizlemek bir güvenlik
-// önlemi değil — sunucu zaten reddediyor — ama tıklandığında hata veren bir
-// sekme göstermek de kötü bir arayüz.
+// renderNav shows only the tabs the user has permission for. Hiding is not a
+// security measure — the server already refuses — but showing a tab that errors
+// when clicked is bad UI.
 function renderNav() {
   const tabs = [
     ["topology", "topology.read"],
@@ -533,7 +533,7 @@ function renderNav() {
   }
 }
 
-// firstAllowedView, kullanıcının görebileceği ilk sekme.
+// firstAllowedView is the first tab the user can see.
 function firstAllowedView() {
   if (can("topology.read")) return "topology";
   if (can("services.read")) return "services";
@@ -543,7 +543,7 @@ function firstAllowedView() {
   return null;
 }
 
-// --- parola değiştirme ---
+// --- changing the password ---
 
 function openPasswordDialog() {
   closeUserMenu();
@@ -565,13 +565,13 @@ function openPasswordDialog() {
 }
 
 // ==========================================================================
-// ORTAK DİYALOG
+// SHARED DIALOG
 // ==========================================================================
 
 let dialogSubmit = null;
 
-// openDialog, tek bir modal iskeletini yeniden kullanır. build() alanları
-// doldurur, submit(values) kaydeder; true dönerse diyalog kapanır.
+// openDialog reuses a single modal skeleton. build() fills in the fields and
+// submit(values) saves; the dialog closes when it returns true.
 function openDialog(title, build, submit, opts = {}) {
   const dlg = $("#dialog");
   const form = $("#dialog-form");
@@ -624,7 +624,7 @@ async function onDialogSubmit(ev) {
   }
 }
 
-// field, etiketli bir form satırı üretir.
+// field produces one labelled form row.
 function field(label, input, hint) {
   return el("label", { class: "field" },
     el("span", { class: "field-label", text: label }),
@@ -632,8 +632,7 @@ function field(label, input, hint) {
     hint ? el("span", { class: "field-hint", text: hint }) : null);
 }
 
-// checkList, çoklu seçim kutusu listesi. data-group ile tek isim altında
-// toplanır.
+// checkList is a list of checkboxes. data-group collects them under one name.
 function checkList(group, items, selected) {
   const box = el("div", { class: "check-list" });
   const chosen = new Set(selected || []);
@@ -652,7 +651,7 @@ function checkList(group, items, selected) {
 }
 
 // ==========================================================================
-// SERVİSLER
+// SERVICES
 // ==========================================================================
 
 async function loadServices() {
@@ -771,9 +770,9 @@ function renderWaterfall(body, spans, hotspots, breakdown, byService) {
     const selfMs = span.selfMs != null ? span.selfMs : span.durationMs;
     const color = isErr ? "var(--err)" : "var(--accent)";
 
-    // Çubuk iki katmanlı: soluk kısım toplam süre, koyu kısım kendi süresi.
-    // Dynatrace'in okunur kıldığı ayrım bu — bir span'in 200 ms sürmesi onun
-    // yavaş olduğu anlamına gelmez, çocukları yavaş olabilir.
+    // The bar is two-layered: the pale part is total duration, the solid part
+    // is self time. This is the distinction Dynatrace made readable — a span
+    // taking 200 ms does not mean it is slow, its children may be.
     const track = el("div", { class: "wf-track" },
       el("div", {
         class: "wf-bar total",
@@ -807,8 +806,8 @@ function renderWaterfall(body, spans, hotspots, breakdown, byService) {
     const detail = a["db.query.text"] || a["db.statement"] || a["url.full"] || a["http.url"];
     const indent = "padding-left:" + (15 + depth * 15) + "px";
 
-    // Çalışma anı detayları: ayrılan bellek, thread, async geçişi, parametre
-    // tipleri. Parametre DEĞERLERİ asla gelmez — agent onları hiç göndermiyor.
+    // Runtime details: allocated memory, thread, async switch, parameter types.
+    // Parameter VALUES never arrive — the agent does not send them at all.
     const runtime = [];
     const alloc = Number(a["nabiz.allocated.bytes"] || 0);
     if (alloc > 0) runtime.push(t("span.allocated") + " " + fmtBytes(alloc));
@@ -851,10 +850,11 @@ const BREAKDOWN_COLORS = {
   messaging: "var(--mq)", other: "var(--ext)",
 };
 
-// renderBreakdown, sürenin kategorilere ve servislere dağılımını çizer.
+// renderBreakdown draws how the duration splits across categories and services.
 //
-// Bir isteğin yavaş olduğunu görmek yetmez; kendi kodunda mı, veritabanında mı,
-// yoksa beklediği başka bir serviste mi yavaş olduğu farklı ekiplere iş düşürür.
+// Seeing that a request is slow is not enough; whether it is slow in its own
+// code, in the database, or in another service it waits on puts the work on
+// different teams.
 function renderBreakdown(slices, byService) {
   const box = el("div", { class: "breakdown" },
     el("div", { class: "hotspots-head" },
@@ -893,7 +893,7 @@ function renderBreakdown(slices, byService) {
   return box;
 }
 
-// renderCodeLocation, span'in geldiği dosya ve satırı gösterir.
+// renderCodeLocation shows the file and line a span came from.
 function renderCodeLocation(code, indent) {
   const bits = [];
   if (code.function) bits.push(code.function);
@@ -919,7 +919,7 @@ function renderCodeLocation(code, indent) {
   return row;
 }
 
-// renderException, istisna olayını türü, mesajı ve yığın iziyle gösterir.
+// renderException shows the exception event with its type, message and stack trace.
 function renderException(ev, indent) {
   const a = ev.attributes || {};
   const box = el("div", { class: "attrs exception", style: indent },
@@ -943,7 +943,7 @@ function renderException(ev, indent) {
   return box;
 }
 
-// renderHotspots, trace'in en pahalı işlemlerini özetler.
+// renderHotspots summarises a trace's most expensive operations.
 function renderHotspots(hotspots) {
   const max = Math.max(...hotspots.map((h) => h.selfMs), 0.0001);
   const box = el("div", { class: "hotspots" },
@@ -972,7 +972,7 @@ function renderHotspots(hotspots) {
 }
 
 // ==========================================================================
-// İSKELET
+// SKELETON
 // ==========================================================================
 
 function switchView(view) {

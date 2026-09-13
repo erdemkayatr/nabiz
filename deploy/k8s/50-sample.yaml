@@ -1,5 +1,5 @@
-# Örnek: enstrümante edilmek için tek gereken annotation.
-# Uygulama imajı, Dockerfile'ı ve kodu değişmez.
+# Example: the single annotation that is all it takes to be instrumented.
+# The application image, its Dockerfile and its code are unchanged.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,8 +15,8 @@ spec:
       annotations:
         nabiz.io/inject-dotnet: "true"
         nabiz.io/service-name: "sample-backend"
-        # Alpine tabanlı imajlarda: nabiz.io/libc: "musl"
-        # Yüksek hacimli servislerde: nabiz.io/sample-ratio: "0.1"
+                # On Alpine-based images: nabiz.io/libc: "musl"
+                # On high-volume services: nabiz.io/sample-ratio: "0.1"
     spec:
       containers:
         - name: app

@@ -1,8 +1,8 @@
-// Package pipeline, alıcı ile depolama/topoloji arasındaki tamponu yönetir.
+// Package pipeline manages the buffer between the receiver and storage/topology.
 //
-// Akış: Accept() -> sınırlı kuyruk -> N worker -> batch -> Processor'lar.
-// Kuyruk sınırlıdır ve dolduğunda bloke etmek yerine düşürür; böylece yavaş
-// bir ClickHouse, sırtından zincirleme olarak uygulamayı yavaşlatamaz.
+// Flow: Accept() -> bounded queue -> N workers -> batch -> Processors.
+// The queue is bounded and drops rather than blocking when full, so a slow
+// ClickHouse cannot cascade backwards into a slow application.
 package pipeline
 
 import (
@@ -15,25 +15,25 @@ import (
 	"github.com/erdemkayatr/nabiz/internal/model"
 )
 
-// Processor, bir batch span üzerinde iş yapan bileşendir.
+// Processor is a component that does work on a batch of spans.
 type Processor interface {
 	Name() string
 	Process(ctx context.Context, spans []*model.Span) error
 }
 
-// Config, pipeline ayarları.
+// Config holds the pipeline settings.
 type Config struct {
-	// QueueSize, kuyruktaki bekleyen span üst sınırı.
+	// QueueSize caps the spans waiting in the queue.
 	QueueSize int
-	// Workers, paralel batch işleyen goroutine sayısı.
+	// Workers is the number of goroutines processing batches in parallel.
 	Workers int
-	// BatchSize, bir Processor çağrısına giden span sayısı.
+	// BatchSize is how many spans go into one Processor call.
 	BatchSize int
-	// FlushInterval, batch dolmasa bile boşaltma aralığı.
+	// FlushInterval is how long to wait before flushing a partial batch.
 	FlushInterval time.Duration
 }
 
-// DefaultConfig, tek node'da ~100k span/sn'yi hedefleyen makul varsayılanlar.
+// DefaultConfig returns sensible defaults aimed at ~100k spans/sec on one node.
 func DefaultConfig() Config {
 	return Config{
 		QueueSize:     200_000,
@@ -43,7 +43,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// Stats, pipeline sayaçları.
+// Stats holds the pipeline counters.
 type Stats struct {
 	Enqueued   atomic.Uint64
 	Dropped    atomic.Uint64
@@ -52,7 +52,7 @@ type Stats struct {
 	QueueDepth atomic.Int64
 }
 
-// Pipeline, span akışını yönetir.
+// Pipeline manages the span stream.
 type Pipeline struct {
 	cfg        Config
 	processors []Processor
@@ -63,13 +63,13 @@ type Pipeline struct {
 	wg    sync.WaitGroup
 }
 
-// New, pipeline'ı kurar.
+// New builds the pipeline.
 func New(cfg Config, log *slog.Logger, processors ...Processor) *Pipeline {
 	if cfg.QueueSize <= 0 {
 		cfg = DefaultConfig()
 	}
-	// Kuyruk chunk taşır; chunk başına ortalama boyutu BatchSize/4 varsayıp
-	// kanal kapasitesini buna göre seçiyoruz.
+	// The queue carries chunks; assuming an average chunk size of BatchSize/4,
+	// the channel capacity is picked accordingly.
 	chunkCap := cfg.QueueSize / max(cfg.BatchSize/4, 1)
 	if chunkCap < 64 {
 		chunkCap = 64
@@ -82,8 +82,8 @@ func New(cfg Config, log *slog.Logger, processors ...Processor) *Pipeline {
 	}
 }
 
-// Accept, alıcıdan gelen span'leri kuyruğa koyar. Asla bloke etmez.
-// Kabul edilemeyen span sayısını döndürür.
+// Accept puts spans from the receiver into the queue. It never blocks.
+// It returns the number of spans that could not be accepted.
 func (p *Pipeline) Accept(spans []*model.Span) int {
 	if len(spans) == 0 {
 		return 0
@@ -99,10 +99,10 @@ func (p *Pipeline) Accept(spans []*model.Span) int {
 	}
 }
 
-// Stats, sayaçlara erişim verir.
+// Stats exposes the counters.
 func (p *Pipeline) Stats() *Stats { return &p.stats }
 
-// Start, worker'ları çalıştırır.
+// Start runs the workers.
 func (p *Pipeline) Start(ctx context.Context) {
 	for i := 0; i < p.cfg.Workers; i++ {
 		p.wg.Add(1)
@@ -113,7 +113,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 	}
 }
 
-// Stop, kuyruğu kapatır ve worker'ların batch'leri boşaltmasını bekler.
+// Stop closes the queue and waits for the workers to flush their batches.
 func (p *Pipeline) Stop() {
 	close(p.queue)
 	p.wg.Wait()
@@ -153,14 +153,14 @@ func (p *Pipeline) worker(ctx context.Context, id int) {
 	}
 }
 
-// dispatch, batch'i tüm Processor'lara sırayla verir. Bir processor hata
-// verirse diğerleri yine de çalışır: topoloji, depolama hatası yüzünden
-// kaybolmamalı.
+// dispatch hands the batch to every Processor in turn. If one processor
+// fails, the others still run: topology must not be lost because of a
+// storage error.
 func (p *Pipeline) dispatch(ctx context.Context, spans []*model.Span) {
 	for _, proc := range p.processors {
 		if err := proc.Process(ctx, spans); err != nil {
 			p.stats.Failed.Add(uint64(len(spans)))
-			p.log.Error("processor hatası", "processor", proc.Name(), "spans", len(spans), "err", err)
+			p.log.Error("processor error", "processor", proc.Name(), "spans", len(spans), "err", err)
 			continue
 		}
 	}

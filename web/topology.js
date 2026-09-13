@@ -1,14 +1,14 @@
 "use strict";
 
 // ==========================================================================
-// TOPOLOJİ
+// TOPOLOGY
 //
-// Yerleşim elle yazılmış bir kuvvet simülasyonuyla çözülür: düğümler
-// birbirini iter, kenarlar yay gibi çeker, merkez hafifçe toplar. Düğüm
-// sürüklenebilir, tuval yakınlaştırılıp kaydırılabilir.
+// The layout is solved by a hand-written force simulation: nodes repel each
+// other, edges pull like springs, and the centre gathers them gently. Nodes
+// can be dragged, and the canvas can be zoomed and panned.
 //
-// Kenar kalınlığı çağrı hacmini gösterir; üzerinde akan noktalar ise çağrı
-// hızını. Kalınlık geçmişi, akış şu anı anlatır.
+// Edge thickness shows call volume; the dots flowing along it show call rate.
+// Thickness is history, flow is the present moment.
 // ==========================================================================
 
 const NODE_ICONS = {
@@ -70,9 +70,9 @@ function buildGraph(data) {
     return;
   }
 
-  // Topoloji şekli değişmediyse simülasyonu hiç yeniden çalıştırma: 10
-  // saniyede bir düğümleri zıplatan bir grafik takip edilemez. Yalnızca
-  // sayılar tazelenir.
+  // If the topology's shape has not changed, never re-run the simulation: a
+  // graph that makes nodes jump every 10 seconds cannot be followed. Only the
+  // numbers are refreshed.
   const sig = rawNodes.map((n) => n.id).sort().join("|") + "##" +
               rawLinks.map((e) => e.source + ">" + e.target).sort().join("|");
   if (sig === topo.sig && topo.nodes.length) {
@@ -81,7 +81,7 @@ function buildGraph(data) {
   }
   topo.sig = sig;
 
-  // Şekil değişti ama tanıdık düğümlerin konumu korunur.
+  // The shape changed, but familiar nodes keep their positions.
   const prev = topo.byId;
   const maxCalls = Math.max(1, ...rawNodes.map((n) => n.calls));
 
@@ -102,15 +102,15 @@ function buildGraph(data) {
 
   seedPositions();
   renderGraph();
-  // İlk kurulum tam simülasyon ister; sonradan eklenen tek bir düğüm için
-  // grafiğin tamamını yeniden dizmek gereksiz.
+  // The first layout needs a full simulation; re-laying out the entire graph
+  // for one added node is needless.
   topo.alpha = prev.size ? 0.45 : 1;
   if (!prev.size) { topo.needsFit = true; topo.view = { x: 0, y: 0, k: 1 }; }
   startSim();
 }
 
-// Şekil aynı, sayılar yeni: düğüm ve kenarların metriklerini yerinde tazele.
-// Konumlara, zoom'a ve seçime dokunulmaz.
+// Same shape, new numbers: refresh node and edge metrics in place.
+// Positions, zoom and selection are left untouched.
 function updateInPlace(rawNodes, rawLinks) {
   const maxCalls = Math.max(1, ...rawNodes.map((n) => n.calls));
 
@@ -162,9 +162,9 @@ function updateInPlace(rawNodes, rawLinks) {
   renderDetail();
 }
 
-// Simülasyonu rastgele konumdan başlatmak yerine katmanlı bir tahminle
-// tohumlarız: grafiğin her yenilemede aynı şekle oturması, operatörün "dün
-// burada duruyordu" sezgisini korur.
+// Rather than starting the simulation from random positions, we seed it with a
+// layered guess: the graph settling into the same shape on every refresh is
+// what preserves the operator's "this was over here yesterday" instinct.
 function seedPositions() {
   const incoming = new Map(topo.nodes.map((n) => [n.id, 0]));
   for (const l of topo.links) incoming.set(l.target, (incoming.get(l.target) || 0) + 1);
@@ -198,19 +198,19 @@ function seedPositions() {
   const colGap = Math.max(220, topo.size.w / (maxDepth + 2));
   for (const [l, group] of perLayer) {
     group.forEach((n, i) => {
-      if (n.x != null) return;   // önceki turdan konumu var
+      if (n.x != null) return;   // it already has a position from the last round
       n.x = colGap * (l + 1);
       n.y = topo.size.h * ((i + 1) / (group.length + 1));
     });
   }
 }
 
-// --- simülasyon ---
+// --- simulation ---
 
-// Etiketler düğümün altında ~140px yer kaplıyor; yay boyu bundan kısa
-// olursa graf okunmaz bir yumağa dönüyor. Yerçekimi yalnızca kopuk
-// parçaları tuvalde tutacak kadar zayıf: görevi toplamak değil,
-// kaçmayı engellemek.
+// Labels take up about 140px below a node; a spring shorter than that turns
+// the graph into an unreadable tangle. Gravity is only strong enough to keep
+// disconnected parts on the canvas: its job is not to gather, only to stop
+// things escaping.
 const SIM = {
   repulsion: 16000, linkDist: 215, linkStrength: 0.055,
   gravity: 0.0022, damping: 0.82, minAlpha: 0.004, decay: 0.018,
@@ -229,7 +229,7 @@ function simStep() {
       let d2 = dx * dx + dy * dy;
       if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
       const d = Math.sqrt(d2);
-      // Büyük düğümler daha geniş yer kaplasın.
+      // Let larger nodes claim more room.
       const f = (SIM.repulsion + (n.r + m.r) * 60) / d2 * a;
       const fx = (dx / d) * f, fy = (dy / d) * f;
       n.vx -= fx; n.vy -= fy; m.vx += fx; m.vy += fy;
@@ -263,8 +263,8 @@ function startSim() {
       simStep();
       positionNodes();
     } else if (topo.needsFit) {
-      // Yerleşim oturdu: grafiği bir kez tuvale sığdır. Kullanıcı sonradan
-      // yakınlaştırırsa bir daha karışma.
+      // The layout has settled: fit the graph to the canvas once. If the user
+      // zooms afterwards, do not interfere again.
       topo.needsFit = false;
       fitView();
     }
@@ -284,7 +284,7 @@ function reheat(alpha) {
   startSim();
 }
 
-// --- çizim ---
+// --- drawing ---
 
 function renderGraph() {
   const root = $("#graph");
@@ -309,15 +309,15 @@ function renderGraph() {
       "stroke-width": (1.3 + 3.2 * Math.sqrt(l.calls / topo.maxLinkCalls)).toFixed(2),
       "marker-end": bad ? "url(#arrow-bad)" : "url(#arrow)",
     });
-    // Görünmez kalın bir eş yol: 1.6px'lik çizgiyi fareyle yakalamak zor.
+    // An invisible thick twin path: a 1.6px line is hard to hit with a mouse.
     l.hit = svg("path", { class: "link-hit" });
     l.hit.addEventListener("click", (e) => { e.stopPropagation(); select("link", l.id); });
     l.path.append(svgTitle(linkTooltip(l)));
     l.hit.append(svgTitle(linkTooltip(l)));
     gLinks.append(l.path, l.hit);
 
-    // Akan noktalar: sayı ve hız çağrı hacmiyle büyür ama logaritmik —
-    // 10 kat trafik 10 kat nokta olsaydı grafik okunmaz olurdu.
+    // Flowing dots: count and speed grow with call volume, but logarithmically
+    // — 10x traffic as 10x dots would make the graph unreadable.
     const count = Math.min(4, 1 + Math.floor(Math.log10(l.calls + 1)));
     l.dots = [];
     for (let i = 0; i < count; i++) {
@@ -389,8 +389,8 @@ function positionNodes() {
   }
 }
 
-// Kenar hafif kavisli: A→B ve B→A aynı hat üzerinde üst üste binmesin.
-// Uçlar daire kenarından başlar, ok ucu için pay bırakılır.
+// Edges are slightly curved so A→B and B→A do not sit on top of each other.
+// The ends start at the circle's edge, leaving room for the arrowhead.
 function linkPath(l) {
   const s = l.s, t = l.t;
   const dx = t.x - s.x, dy = t.y - s.y;
@@ -429,14 +429,14 @@ function drawMessage(msg, color) {
   root.append(t);
 }
 
-// --- zoom / pan / sürükleme ---
+// --- zoom / pan / drag ---
 
 function applyView() {
   const vp = $("#viewport");
   if (vp) vp.setAttribute("transform", "translate(" + topo.view.x + "," + topo.view.y + ") scale(" + topo.view.k + ")");
 }
 
-// viewBox tuvali genişliğe ölçekliyor; ekran pikselini önce ona çevir.
+// The viewBox scales the canvas to the width; convert screen pixels first.
 function toCanvas(clientX, clientY) {
   const rect = $("#graph").getBoundingClientRect();
   return {
@@ -452,7 +452,7 @@ function screenToGraph(clientX, clientY) {
 function zoomAt(factor, clientX, clientY) {
   const c = toCanvas(clientX, clientY);
   const k2 = Math.min(3.2, Math.max(0.25, topo.view.k * factor));
-  // İmlecin altındaki nokta sabit kalsın.
+  // Keep the point under the cursor fixed.
   topo.view.x = c.x - (c.x - topo.view.x) * (k2 / topo.view.k);
   topo.view.y = c.y - (c.y - topo.view.y) * (k2 / topo.view.k);
   topo.view.k = k2;
@@ -477,10 +477,10 @@ function beginDrag(e, node) {
   const p = screenToGraph(e.clientX, e.clientY);
   topo.drag = { node: node, dx: node.x - p.x, dy: node.y - p.y };
   topo.dragMoved = false;
-  // Yakalama düğümün KENDİSİNDE olmalı. SVG kökünde yakalarsak sonraki
-  // click olayının hedefi de kök olur ve düğüm tıklaması hiç çalışmaz.
-  // Olaylar buradan köke baloncuklandığı için pan/move dinleyicileri yine
-  // çalışır.
+  // The capture has to be on the node ITSELF. Capturing on the SVG root makes
+  // the root the target of the following click event too, and clicking a node
+  // stops working entirely. Events still bubble up to the root from here, so
+  // the pan/move listeners keep working.
   node.g.setPointerCapture(e.pointerId);
   reheat(0.35);
 }
@@ -513,8 +513,8 @@ function onPointerMove(e) {
 
 function onPointerUp() {
   if (topo.drag) {
-    // Bırakılan düğüm yerinde kalır: operatör grafiği kendi zihnindeki
-    // düzene göre yerleştirebilsin.
+    // A dropped node stays where it was put, so the operator can arrange the
+    // graph the way they picture it.
     topo.drag.node.fixed = true;
     topo.drag = null;
     reheat(0.2);
@@ -524,7 +524,7 @@ function onPointerUp() {
   setTimeout(() => { topo.dragMoved = false; }, 0);
 }
 
-// --- seçim ve detay paneli ---
+// --- selection and detail panel ---
 
 function select(kind, id) {
   const same = topo.selected && topo.selected.kind === kind && topo.selected.id === id;
@@ -559,7 +559,7 @@ function applySelection() {
   }
 }
 
-// Düğüm/kenar tür etiketleri sözlükten okunur; dil değişince otomatik döner.
+// Node and edge type labels come from the dictionary; they follow the language.
 const TYPE_LABEL = new Proxy({}, {
   get: (_, key) => (typeof key === "string" && STRINGS[LANG]["type." + key] !== undefined ? t("type." + key) : undefined),
   has: () => true,
@@ -630,9 +630,9 @@ function renderDetail() {
   panel.hidden = false;
 }
 
-// initTopologyCanvas, tuvalin fare/dokunma ve yakınlaştırma davranışlarını
-// bağlar. Topolojiye ait her şeyin tek dosyada durması, iskeletin bu görünümün
-// iç işleyişini bilmesini gereksiz kılıyor.
+// initTopologyCanvas wires up the canvas's mouse, touch and zoom behaviour.
+// Keeping everything about the topology in one file means the skeleton does not
+// have to know how this view works inside.
 function initTopologyCanvas() {
   const graph = $("#graph");
   graph.addEventListener("pointerdown", beginPan);
@@ -654,7 +654,7 @@ function initTopologyCanvas() {
   $("#zoom-out").addEventListener("click", () => zoomAt(1 / 1.25, center()[0], center()[1]));
   $("#zoom-fit").addEventListener("click", fitView);
 
-  // Arka plandaki sekme, izlediği sisteme yük bindirmesin.
+  // A tab in the background must not put load on the system it monitors.
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopSim();
     else if (state.view === "topology" && topo.nodes.length) startSim();

@@ -24,7 +24,7 @@ spec:
       labels:
         app.kubernetes.io/name: nabiz-api
     spec:
-      # Dump dizini volume'ü bu grupla oluşsun; container root olmadan yazsın.
+            # Create the dump directory volume with this group, so the container can
       securityContext:
         fsGroup: 10001
       volumes:
@@ -37,24 +37,24 @@ spec:
           env:
             - { name: NABIZ_CLICKHOUSE_ADDRS,    value: "nabiz-clickhouse.nabiz.svc:9000" }
             - { name: NABIZ_CLICKHOUSE_DATABASE, value: "nabiz" }
-            # Denetim düzlemi. Parola Secret'tan gelir, DSN'e gömülmez.
+                        # Control plane. The password comes from a Secret, never baked into the DSN.
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef: { name: nabiz-postgres, key: POSTGRES_PASSWORD }
             - name: NABIZ_POSTGRES_DSN
               value: "postgres://nabiz:$(PGPASSWORD)@nabiz-postgres.nabiz.svc:5432/nabiz?sslmode=disable"
             # NABIZ_ADMIN_EMAIL / NABIZ_ADMIN_PASSWORD bilerek verilmiyor.
-            # İlk açılışta nabiz rastgele bir parola üretip loga bir kez
+                        # At first startup nabiz generates a random password and writes it
             # yazar: "kubectl logs deploy/nabiz-api | grep parola"
             - { name: NABIZ_ADMIN_EMAIL, value: "admin@nabiz.local" }
-            # Tanılama jetonlarını şifreleyen anahtar. Bu Secret'ı siz
-            # oluşturun; anahtar değişirse saklanmış jetonlar açılamaz.
+                        # The key that encrypts diagnostics tokens. You create this Secret;
+                        # if the key changes, stored tokens can no longer be decrypted.
             - name: NABIZ_SECRET_KEY
               valueFrom:
                 secretKeyRef: { name: nabiz-secret-key, key: key, optional: true }
             - { name: NABIZ_DUMP_DIR, value: "/var/lib/nabiz/dumps" }
-            # emptyDir sizeLimit ile uyumlu tutun: kota dolmadan disk dolarsa
-            # pod tahliye edilir.
+            # Keep this consistent with the emptyDir sizeLimit: if the disk
+            # fills before the quota is reached, the pod is evicted instead.
             - { name: NABIZ_DUMP_QUOTA_GB, value: "15" }
             - { name: NABIZ_DUMP_RETENTION_DAYS, value: "7" }
           ports:
